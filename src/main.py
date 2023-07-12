@@ -7,16 +7,16 @@ from matplotlib.colors import LinearSegmentedColormap
 import mpl_scatter_density
 from scipy.stats import binned_statistic_2d
 
-data = pd.read_pickle('../res/plt01929_iso_CRange_YH2.pkl').dropna()
+prog_var = 'H2O'
+data = pd.read_pickle(f'res/plt01929_iso_CRange_Y{prog_var}.pkl').dropna()
 # data = data.sample(10000)
-# data = data[(data['C_H2O'] <= 0.85) & (data['C_H2O'] >= 0.75)]
-data = data[data['C_H2'] == 0.8]
+data = data[data[f'C_{prog_var}'] == 0.8]
 
 k = data['MeanCurvature_progress_variable']
 Z = data['mixture_fraction']
-C_H2 = data['C_H2']
-C_H2O = data['C_H2O']
+C = data[f'C_{prog_var}']
 Y_OH = data['Y_OH']
+Y_H = data['Y_H']
 
 white_viridis = LinearSegmentedColormap.from_list('white_viridis', [
     (0, '#ffffff'),
@@ -37,7 +37,7 @@ def main():
 def plot3D(data):
     fig = plt.figure()
     ax = plt.axes(projection='3d')
-    ax.scatter3D(k, Z, C_H2, s=0.25)
+    ax.scatter3D(k, Z, C, s=0.25)
     ax.set_xlabel('Mean Curvature k')
     ax.set_ylabel('Mixture Fraction Z')
     ax.set_zlabel('Progress Variable C')
@@ -46,11 +46,16 @@ def plot3D(data):
 
 def plot2D(cur_data):
     fig = plt.figure()
-    # plot_against_2D(fig, k, C_H2, 'Curvature K', 'Prog Var C(H2)')
-    rows = 1
-    cols = 1
+    # plot_against_2D(fig, k, C, 'Curvature K', 'Prog Var C(H2)')
+    rows = 2
+    cols = 2
     plot_against_2D(fig, rows, cols, 1, k, Z, Y_OH, 'Curvature k', 'Mixture Fraction Z', 'Mass Fraction OH')
-    # plot_against_2D(fig, rows, cols, 2, k, C_H2O, 'Curvature k', 'Prog Var C(H2O)')
+    plot_against_2D(fig, rows, cols, 2, k, Z, Y_H, 'Curvature k', 'Mixture Fraction Z', 'Mass Fraction H')
+    # plot_against_2D(fig, rows, cols, 3, k, Z, Y_OH, 'Curvature k', 'Mixture Fraction Z', 'Mass Fraction OH')
+    # plot_against_2D(fig, rows, cols, 4, k, Z, Y_OH, 'Curvature k', 'Mixture Fraction Z', 'Mass Fraction OH')
+
+    # pdf_2D(fig, rows, cols, 2, k, C, 'Curvature k', f'Prog Var C({prog_var})')
+    # pdf_2D(fig, rows, cols, 3, C, Z, f'Prog Var C({prog_var})', 'Mixture Fraction Z')
     fig.tight_layout()
     plt.show()
 
@@ -61,10 +66,6 @@ def get_avg(variable, cur_data):
 
 
 def plot_against_2D(fig, r, c, i, xd, yd, z, xlabel, ylabel, zlabel):
-    # ax = fig.add_subplot(r, c, i, projection='scatter_density')
-    # density = ax.scatter_density(xd, yd, cmap=white_viridis, dpi=70)
-    # fig.colorbar(density, label='Number of points per pixel')
-
     z = [d if d >= 0 else 0 for d in z]
     ax = fig.add_subplot(r, c, i)
     H, x_edges, y_edges, bin_num = binned_statistic_2d(xd, yd, values=z, statistic='mean', bins=[750, 750])
@@ -72,6 +73,16 @@ def plot_against_2D(fig, r, c, i, xd, yd, z, xlabel, ylabel, zlabel):
     XX, YY = np.meshgrid(x_edges, y_edges)
     p1 = ax.pcolormesh(XX, YY, H.T)
     cbar = fig.colorbar(p1, ax=ax, label=zlabel)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    return
+
+
+def pdf_2D(fig, r, c, i, xd, yd, xlabel, ylabel):
+    ax = fig.add_subplot(r, c, i, projection='scatter_density')
+    density = ax.scatter_density(xd, yd, cmap=white_viridis, dpi=70)
+    fig.colorbar(density, label='Number of points per pixel')
+
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     return
