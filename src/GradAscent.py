@@ -8,9 +8,11 @@ from csvToPkl import CSVtoPKL
 
 lib_path = 'lib/GradAscent.dll'
 GradAscentLib = cdll.LoadLibrary(lib_path)
-GradAscent = GradAscentLib.getNextPoints
+gradAscent = GradAscentLib.getNextPoints
+fillGrid = GradAscentLib.fillGrid
 
 FloatPtr = POINTER(c_float)
+IntPtr = POINTER(c_int)
 
 
 class GradAscent:
@@ -26,13 +28,13 @@ class GradAscent:
         c_gx = self.gx.ctypes.data_as(FloatPtr)
         c_gy = self.gy.ctypes.data_as(FloatPtr)
         c_gz = self.gz.ctypes.data_as(FloatPtr)
-        GradAscent.argtypes = [FloatPtr,
+        gradAscent.argtypes = [FloatPtr,
                                FloatPtr,
                                FloatPtr,
                                FloatPtr,
                                c_int]
-        GradAscent.restype = FloatPtr
-        res_pts = GradAscent(c_pts, c_gx, c_gy, c_gz, self.num_pts)
+        gradAscent.restype = FloatPtr
+        res_pts = gradAscent(c_pts, c_gx, c_gy, c_gz, self.num_pts)
         res = np.ctypeslib.as_array(res_pts, shape=(self.num_pts*3,))
         return res
 
@@ -55,6 +57,14 @@ class AMRGrid:
         self.cell_grads = None
         self.amr_prog_grid = None
         self.amr_gradient_grid = None
+        self.c_x = None
+        self.c_y = None
+        self.c_z = None
+        self.c_xyz_mins = None
+        self.c_xyz_difs = None
+        self.c_grid_dims = None
+
+        self.setFilledAMRShape()
 
     @staticmethod
     def getSortedUniqueDataDif(data):
@@ -72,32 +82,56 @@ class AMRGrid:
 
     # gets shape for full AMR grid
     def setFilledAMRShape(self):
-        self.pos_sorted_unique = [sorted(x.unique()) for x in self.cell_pos]
-        self.pos_dif = [self.getSortedUniqueDataDif(x) for x in self.pos_sorted_unique]
-        self.pos_lims = [self.getSortedUniqueDataLims(x) for x in self.pos_sorted_unique]
-        self.num_cells = [round((self.pos_lims[i][1] - self.pos_lims[i][0]) / self.pos_dif[i]) for i in range(3)]
-        self.amr_shape = self.num_cells[0], self.num_cells[1], self.num_cells[2]
+        self.pos_sorted_unique = np.array([sorted(x.unique()) for x in self.cell_pos], dtype=np.float32)
+        self.pos_dif = np.array([self.getSortedUniqueDataDif(x) for x in self.pos_sorted_unique], dtype=np.float32)
+        self.pos_lims = np.array([self.getSortedUniqueDataLims(x) for x in self.pos_sorted_unique], dtype=np.float32)
+        self.amr_shape = np.array([round((self.pos_lims[i][1] - self.pos_lims[i][0]) / self.pos_dif[i]) for i in range(3)], dtype=np.int32)
 
-    def fillAMRGrid(self):
-        self.setFilledAMRShape()
-        shape = self.amr_shape
-        self.amr_prog_grid = np.zeros(shape=shape)
-        # self.amr_gradient_grid = np.zeros(shape=(3, shape[0], shape[1], shape[2]))
-        print('filling progress grid ...')
-        # MAKE C++ DLL TO DO THIS, TOO SLOW
-        for i in range(len(self.amr_data)):
-            if i % 10000 == 0:
-                print(i)
-            cur_x = self.cell_pos[0][i]
-            cur_y = self.cell_pos[1][i]
-            cur_z = self.cell_pos[2][i]
-            cur_pos = [cur_x, cur_y, cur_z]
-            grid_index = self.cellPosToGridIndex(cur_pos)
-            gi = grid_index[0]
-            gj = grid_index[1]
-            gk = grid_index[2]
-            self.amr_prog_grid[gi][gj][gk] = self.cell_prog[i]
-        print(self.amr_prog_grid)
+        xyz_mins = np.array([i[0] for i in self.pos_lims], dtype=np.float32)
+        self.c_x = self.listToFloatPtr(self.cell_pos[0])
+        self.c_y = self.listToFloatPtr(self.cell_pos[1])
+        self.c_z = self.listToFloatPtr(self.cell_pos[2])
+        self.c_xyz_mins = self.listToFloatPtr(xyz_mins)
+        self.c_xyz_difs = self.listToFloatPtr(self.pos_dif)
+        self.c_grid_dims = self.listToIntPtr(self.amr_shape)
+
+    @staticmethod
+    def listToFloatPtr(d):
+        return np.array(d, dtype=np.float32).ctypes.data_as(FloatPtr)
+
+    @staticmethod
+    def listToIntPtr(d):
+        return np.array(d, dtype=np.float32).ctypes.data_as(IntPtr)
+
+    def fillAMRGrid(self, grid_to_fill, val_to_fill, val_name):
+        print(f'filling {val_name} grid ...')
+        flat_grid = grid_to_fill.flatten()
+        grid_size = len(flat_grid)
+        xyz_mins = np.array([i[0] for i in self.pos_lims], dtype=np.float32)
+
+        c_grid = self.listToFloatPtr(flat_grid)
+        c_val = self.listToFloatPtr(val_to_fill)
+
+        fillGrid.argtypes = [FloatPtr,
+                             FloatPtr,
+                             FloatPtr,
+                             FloatPtr,
+                             FloatPtr,
+                             FloatPtr,
+                             FloatPtr,
+                             IntPtr,
+                             c_int]
+        fillGrid.restype = FloatPtr
+        res_pts = fillGrid(c_grid,
+                           c_val,
+                           self.c_x,
+                           self.c_y,
+                           self.c_z,
+                           self.c_xyz_mins,
+                           self.c_xyz_difs,
+                           self.c_grid_dims,
+                           len(self.amr_data))
+        return np.ctypeslib.as_array(res_pts, shape=(grid_size,)).reshape(grid_to_fill.shape)
 
 
 if __name__ == '__main__':
@@ -109,5 +143,3 @@ if __name__ == '__main__':
     print(f'Reading {file_name} ...')
     amr_data = pd.read_pickle(file_name)
     grid = AMRGrid(amr_data)
-    print('Filling grid...')
-    grid.fillAMRGrid()
