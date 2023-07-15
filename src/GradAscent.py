@@ -4,6 +4,7 @@ import numpy as np
 from multiprocessing import freeze_support
 from modin import config
 from distributed import Client
+from csvToPkl import CSVtoPKL
 
 lib_path = 'lib/GradAscent.dll'
 GradAscentLib = cdll.LoadLibrary(lib_path)
@@ -37,44 +38,65 @@ class gradAscent:
         res = np.ctypeslib.as_array(res_pts, shape=(self.num_pts*3,))
 
 
-def fillAMRGrid(amr_data):
-    px, py, pz = amr_data["CellCenters:0"], \
-                 amr_data["CellCenters:1"], \
-                 amr_data["CellCenters:2"]
+class AMRGrid:
+    def __init__(self, data):
+        self.amr_data = data
+        self.cell_pos = None
+        self.pos_sorted_unique = None
+        self.pos_dif = None
+        self.pos_lims = None
+        self.num_cells = None
+        self.amr_shape = None
+        self.cell_grads = None
+        self.amr_pos_grid = None
+        self.amr_gradient_grid = None
 
-    gx, gy, gz = amr_data["progress_variable_gx"], \
-                 amr_data["progress_variable_gx"], \
-                 amr_data["progress_variable_gx"]
+    @staticmethod
+    def getSortedUniqueDataDif(data):
+        return data[1] - data[0]
 
-    all_x, all_y, all_z = sorted(px.unique()), \
-                          sorted(py.unique()), \
-                          sorted(pz.unique())
-    print('unique vals: ')
-    print(all_x)
-    print(all_y)
-    print(all_z)
+    @staticmethod
+    def getSortedUniqueDataLims(data):
+        return data[0], data[-1]
 
-    prog_var = amr_data["progress_variable"]
+    def cellPosToGridIndex(self, pos):
+        return [(pos[i] - self.pos_lims[i][0]) / self.pos_dif[i] for i in range(len(pos))]
 
-    x_lim = (min(px), max(px))
-    y_lim = (min(py), max(py))
-    z_lim = (min(pz), max(pz))
+    def gridIndexToCellPos(self, index):
+        return [index[i] * self.pos_dif[i] + self.pos_lims[i][0] for i in range(len(index))]
 
-    print(f'prog min,max : {min(prog_var)},{max(prog_var)}')
-    lims = [x_lim, y_lim, z_lim]
-    print(f'xyz lims: {lims}')
-    num_x = lims[0][1] / lims[0][0]
-    num_y = lims[1][1] / lims[1][0]
-    print(f'num x: {num_x}, num y: {num_y}')
+    # gets shape for full AMR grid
+    def setFilledAMRShape(self):
+        self.cell_pos = [self.amr_data["CellCenters:0"],
+                         self.amr_data["CellCenters:1"],
+                         self.amr_data["CellCenters:2"]]
+        self.pos_sorted_unique = [sorted(x.unique()) for x in self.cell_pos]
+        self.pos_dif = [self.getSortedUniqueDataDif(x) for x in self.pos_sorted_unique]
+        self.pos_lims = [self.getSortedUniqueDataLims(x) for x in self.pos_sorted_unique]
+        self.num_cells = [round((self.pos_lims[i][1] - self.pos_lims[i][0]) / self.pos_dif[i]) for i in range(3)]
+        self.amr_shape = self.num_cells[0], self.num_cells[1], self.num_cells[2]
 
-    return
+    def fillAMRGrid(self):
+        self.cell_grads = [self.amr_data["progress_variable_gx"],
+                           self.amr_data["progress_variable_gy"],
+                           self.amr_data["progress_variable_gz"]]
+        self.setFilledAMRShape()
+        shape = self.amr_shape
+        print(f'amr shape: {shape}')
+        self.amr_pos_grid = np.zeros(shape=shape)
+        self.amr_gradient_grid = np.zeros(shape=(3,shape[0], shape[1], shape[2]))
+        print(self.amr_pos_grid)
+        print(f'grad shape: {self.amr_gradient_grid.shape}')
 
 
 if __name__ == '__main__':
+    # CSVtoPKL('combGradCurv01929Data')
     file_name = 'res/combGradCurv01929Data.pkl'
     client = Client()
     freeze_support()
     config.MinPartitionSize.put(128)
     print(f'Reading {file_name} ...')
     amr_data = pd.read_pickle(file_name)
-    fillAMRGrid(amr_data)
+    grid = AMRGrid(amr_data)
+    print('Filling grid...')
+    grid.fillAMRGrid()
