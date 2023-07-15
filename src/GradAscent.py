@@ -13,7 +13,7 @@ GradAscent = GradAscentLib.getNextPoints
 FloatPtr = POINTER(c_float)
 
 
-class gradAscent:
+class GradAscent:
     def __init__(self, pts, gx, gy, gz, num_pts):
         self.pts = np.array(pts, dtype=np.float32)
         self.gx = np.array(gx, dtype=np.float32)
@@ -26,16 +26,15 @@ class gradAscent:
         c_gx = self.gx.ctypes.data_as(FloatPtr)
         c_gy = self.gy.ctypes.data_as(FloatPtr)
         c_gz = self.gz.ctypes.data_as(FloatPtr)
-
         GradAscent.argtypes = [FloatPtr,
                                FloatPtr,
                                FloatPtr,
                                FloatPtr,
                                c_int]
         GradAscent.restype = FloatPtr
-
         res_pts = GradAscent(c_pts, c_gx, c_gy, c_gz, self.num_pts)
         res = np.ctypeslib.as_array(res_pts, shape=(self.num_pts*3,))
+        return res
 
 
 class AMRGrid:
