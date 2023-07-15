@@ -1,12 +1,11 @@
 import numpy as np
+import modin.pandas as pd
 
 search_text = '('
 replace_text = '_'
 
-c_range = np.arange(0.05, 1, 0.05)
 
-
-def formatDAT(file_prefix):
+def formatDAT(file_prefix, c_range):
     for c in c_range:
         file_name = rf'{file_prefix}{"{:.2f}".format(c)}.dat'
         print(f'Editing {file_name} ...')
