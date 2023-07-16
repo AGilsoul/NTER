@@ -1,10 +1,10 @@
-import math
 from ctypes import cdll, c_int, c_float, POINTER
 import pandas as pd
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 import matplotlib.pyplot as plt
 from scipy.stats import binned_statistic_2d
+import sys
 
 from csvToPkl import CSVtoPKL
 
@@ -69,6 +69,7 @@ class AMRGrid:
                            self.amr_data['progress_variable_gz']]
         self.cell_prog = self.amr_data['progress_variable']
         self.cell_curv = self.amr_data['MeanCurvature_progress_variable']
+        self.cell_validity = [1.0 for _ in range(len(self.amr_data))]
         self.x_range = None
         self.y_range = None
         self.z_range = None
@@ -88,6 +89,7 @@ class AMRGrid:
         self.amr_gx_grid = self.fillAMRGrid(self.amr_gx_grid, self.cell_grads[0], 'grad x')
         self.amr_gy_grid = self.fillAMRGrid(self.amr_gy_grid, self.cell_grads[1], 'grad y')
         self.amr_gz_grid = self.fillAMRGrid(self.amr_gz_grid, self.cell_grads[2], 'grad z')
+        self.amr_validity_grid = self.fillAMRGrid(self.amr_validity_grid, self.cell_validity, 'cell validity')
 
         print('making interpolators')
         interp_range = (self.x_range, self.y_range, self.z_range)
@@ -96,62 +98,85 @@ class AMRGrid:
         self.gx_interp = RegularGridInterpolator(interp_range, self.amr_gx_grid)
         self.gy_interp = RegularGridInterpolator(interp_range, self.amr_gy_grid)
         self.gz_interp = RegularGridInterpolator(interp_range, self.amr_gz_grid)
+        self.valid_interp = RegularGridInterpolator(interp_range, self.amr_validity_grid)
         print('done!')
 
     def getGACoords(self):
         x = self.x_range[round(self.amr_shape[0] / 2)]
         y = self.y_range[round(self.amr_shape[1] / 2)]
-        z = self.z_range[round(self.amr_shape[2] / 10)]
+        z = self.z_range[0]
         return [x, y, z]
+
+    def validPoint(self, p):
+        x_in_grid = self.pos_lims[0][1] > p[0] >= self.pos_lims[0][0]
+        y_in_grid = self.pos_lims[1][1] > p[1] >= self.pos_lims[1][0]
+        z_in_grid = self.pos_lims[2][1] > p[2] >= self.pos_lims[2][0]
+        valid_cell = self.valid_interp(p) != 0.0
+        return x_in_grid and y_in_grid and z_in_grid and valid_cell
 
     @staticmethod
     def pointDist(p1, p2):
-        return np.sqrt(sum([(p1[i] - p2[i])**2 for i in range(len(p1))]))
+        return np.sqrt(sum([(p1[i] - p2[i]) ** 2 for i in range(len(p1))]))
 
-    def gradAscentPoint(self):
-        amr_coords = self.getGACoords()
-        xyz = self.cellPosToGridIndex(amr_coords)
+    def gradAscentPoint(self, amr_coords):
+        amr_coords = np.array(amr_coords, dtype=np.float32)
+        num_pts = amr_coords.shape[0]
+        xyz = [self.cellPosToGridIndex(i) for i in amr_coords]
+        print(f'starting coords: {amr_coords}')
+        cur_progs = [[self.amr_prog_grid[xyz[i][0]][xyz[i][1]][xyz[i][2]]] for i in range(num_pts)]
+        cur_curvs = [[self.amr_curv_grid[xyz[i][0]][xyz[i][1]][xyz[i][2]]] for i in range(num_pts)]
 
-        cur_prog = self.amr_prog_grid[xyz[0]][xyz[1]][xyz[2]]
-        cur_curv = self.amr_curv_grid[xyz[0]][xyz[1]][xyz[2]]
-        gx = [self.amr_gx_grid[xyz[0]][xyz[1]][xyz[2]]]
-        gy = [self.amr_gy_grid[xyz[0]][xyz[1]][xyz[2]]]
-        gz = [self.amr_gz_grid[xyz[0]][xyz[1]][xyz[2]]]
+        r_arr = [[0] for _ in amr_coords]
+        path_arr = [list(i) for i in amr_coords]
+        prog_arr = cur_progs
+        curv_arr = cur_curvs
 
-        r_arr = [0]
-        prog_arr = [cur_prog]
-        curv_arr = [cur_curv]
+        valid_indices = np.arange(0, num_pts)
 
-        last_point = amr_coords
+        last_points = amr_coords
 
-        while cur_prog < 0.98:
-            cur_point = GradAscent.perform_gA(last_point, gx, gy, gz, 1)
-            r_arr.append(self.pointDist(cur_point, last_point) + r_arr[-1])
-            cur_prog = self.prog_interp(cur_point)[0]
-            cur_curv = self.curv_interp(cur_point)[0]
-            # print(f'new point {cur_point} with prog {cur_prog} and curv {cur_curv}')
-            prog_arr.append(cur_prog)
-            curv_arr.append(cur_curv)
-            gx = self.gx_interp(cur_point)
-            gy = self.gy_interp(cur_point)
-            gz = self.gz_interp(cur_point)
-            last_point = cur_point
+        while True:
+            p_to_remove = []
+            for p in range(len(last_points)):
+                if not self.validPoint(last_points[p]) or prog_arr[p][-1] > 0.99:
+                    p_to_remove.append(p)
+            valid_indices = np.delete(valid_indices, p_to_remove)
+            last_points = np.delete(last_points, p_to_remove, axis=0)
+            num_pts = last_points.shape[0]
+            if len(last_points) == 0:
+                break
 
-        print(f'r: {r_arr}')
-        print(f'prog: {prog_arr}')
-        print(f'curv: {curv_arr}')
-        print(len(r_arr))
-        print(len(prog_arr))
-        print(len(curv_arr))
+            gx = np.array([self.gx_interp(p) for p in last_points], dtype=np.float32)
+            gy = np.array([self.gy_interp(p) for p in last_points], dtype=np.float32)
+            gz = np.array([self.gz_interp(p) for p in last_points], dtype=np.float32)
+
+            cur_points = GradAscent.perform_gA(np.array(last_points, dtype=np.float32).flatten(), gx.flatten(), gy.flatten(), gz.flatten(), num_pts).reshape(last_points.shape)
+            for p in range(len(cur_points)):
+                index = valid_indices[p]
+                r_arr[index].append(self.pointDist(cur_points[p], last_points[index]) + r_arr[index][-1])
+                prog_arr[index].append(self.prog_interp(cur_points[p])[0])
+                curv_arr[index].append(self.curv_interp(cur_points[p])[0])
+                path_arr[index].append(list(cur_points[p]))
+
+            last_points = cur_points
+
+        num_pts = amr_coords.shape[0]
+        print('final coords: ')
+        for p in path_arr:
+            print(p[-1])
+
         fig = plt.figure()
-        ax = fig.add_subplot(1, 1, 1)
-        H, x_edges, y_edges, bin_num = binned_statistic_2d(r_arr, prog_arr, values=curv_arr, statistic='mean', bins=[75, 75])
-        H = np.ma.masked_invalid(H)
-        XX, YY = np.meshgrid(x_edges, y_edges)
-        p1 = ax.pcolormesh(XX, YY, H.T)
-        cbar = fig.colorbar(p1, ax=ax, label='curvature')
-        ax.set_xlabel('r')
-        ax.set_ylabel('progress variable ')
+
+        for p in range(num_pts):
+            ax = fig.add_subplot(1, num_pts, p+1)
+            H, x_edges, y_edges, bin_num = binned_statistic_2d(r_arr[p], prog_arr[p], values=curv_arr[p], statistic='mean', bins=[100, 100])
+            H = np.ma.masked_invalid(H)
+            XX, YY = np.meshgrid(x_edges, y_edges)
+            p1 = ax.pcolormesh(XX, YY, H.T)
+            cbar = fig.colorbar(p1, ax=ax, label='curvature')
+            ax.set_xlabel('r')
+            ax.set_ylabel('progress variable ')
+
         fig.tight_layout()
         plt.show()
 
@@ -202,6 +227,7 @@ class AMRGrid:
         self.amr_gx_grid = np.zeros(self.amr_shape)
         self.amr_gy_grid = np.zeros(self.amr_shape)
         self.amr_gz_grid = np.zeros(self.amr_shape)
+        self.amr_validity_grid = np.zeros(self.amr_shape)
 
         self.x_range = self.pos_sorted_unique[0]
         self.y_range = self.pos_sorted_unique[1]
@@ -232,4 +258,5 @@ if __name__ == '__main__':
     print(amr_data.columns)
     print(f'Setting up grid ...')
     grid = AMRGrid(amr_data)
-    grid.gradAscentPoint()
+    coords = grid.getGACoords()
+    grid.gradAscentPoint([coords, [coords[0]+0.001, coords[1]+0.001, coords[2]]])
