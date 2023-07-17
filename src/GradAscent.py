@@ -15,7 +15,8 @@ from csvToPkl import CSVtoPKL
 FloatPtr = POINTER(c_float)
 IntPtr = POINTER(c_int)
 
-lib_path = 'lib/GradAscent.so'
+# lib_path = 'lib/GradAscent.so'  # linux
+lib_path = 'lib/GradAscent.dll'  # windows
 GradAscentLib = cdll.LoadLibrary(lib_path)
 gradAscent = GradAscentLib.getNextPoints
 gradAscent.argtypes = [FloatPtr,
