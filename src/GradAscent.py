@@ -1,4 +1,4 @@
-from ctypes import cdll, c_int, c_float, POINTER
+from ctypes import cdll, c_int, c_float, POINTER, c_bool
 
 import matplotlib
 import pandas as pd
@@ -37,6 +37,20 @@ fillGrid.argtypes = [FloatPtr,
                              c_int]
 fillGrid.restype = FloatPtr
 
+gradAscent.argtypes = [FloatPtr,
+                               FloatPtr,
+                               FloatPtr,
+                               FloatPtr,
+                               FloatPtr,
+                               FloatPtr,
+                               FloatPtr,
+                               FloatPtr,
+                               IntPtr,
+                               c_int
+                    ]
+gradAscent.restype = FloatPtr
+
+
 def meshgrid2(*arrs):
     arrs = tuple(reversed(arrs))
     lens = map(len, arrs)
@@ -58,24 +72,23 @@ def meshgrid2(*arrs):
 
 class GradAscent:
     @staticmethod
-    def perform_gA(pts, gx, gy, gz, num_pts):
-        pts = np.array(pts, dtype=np.float32)
+    def perform_gA(x, y, z, gx, gy, gz, c_xyz_mins, c_xyz_difs, c_grid_dims, num_pts):
+        x = np.array(x, dtype=np.float32)
+        y = np.array(y, dtype=np.float32)
+        z = np.array(z, dtype=np.float32)
+
         gx = np.array(gx, dtype=np.float32)
         gy = np.array(gy, dtype=np.float32)
         gz = np.array(gz, dtype=np.float32)
-        num_pts = num_pts
 
-        c_pts = pts.ctypes.data_as(FloatPtr)
+        c_x = x.ctypes.data_as(FloatPtr)
+        c_y = y.ctypes.data_as(FloatPtr)
+        c_z = z.ctypes.data_as(FloatPtr)
         c_gx = gx.ctypes.data_as(FloatPtr)
         c_gy = gy.ctypes.data_as(FloatPtr)
         c_gz = gz.ctypes.data_as(FloatPtr)
-        gradAscent.argtypes = [FloatPtr,
-                               FloatPtr,
-                               FloatPtr,
-                               FloatPtr,
-                               c_int]
-        gradAscent.restype = FloatPtr
-        res_pts = gradAscent(c_pts, c_gx, c_gy, c_gz, num_pts)
+
+        res_pts = gradAscent(c_x, c_y, c_z, c_gx, c_gy, c_gz, c_xyz_mins, c_xyz_difs, c_grid_dims, num_pts)
         res = np.ctypeslib.as_array(res_pts, shape=(num_pts*3,))
         return res
 
@@ -137,10 +150,6 @@ class AMRGrid:
         g = np.meshgrid(x, y, [z])
         points = np.vstack(list(map(np.ravel, g))).T
         print(points.shape)
-
-        # x = self.x_range[round(self.amr_shape[0] / 2)]
-        # y = self.y_range[round(self.amr_shape[1] / 2)]
-        # return [x, y, z]
         return points
 
     def validPoint(self, p):
@@ -181,31 +190,28 @@ class AMRGrid:
                 if not self.validPoint(last_points[p]) or prog_arr[p][-1] > 0.99:
                     p_to_remove.append(p)
             valid_indices = np.delete(valid_indices, p_to_remove)
-            # print(f'indices to remove: {p_to_remove}')
             last_points = np.delete(last_points, p_to_remove, axis=0)
             num_pts = last_points.shape[0]
-            if len(last_points) == 0:
+            if num_pts == 0:
                 break
-            if last_num_pts != num_pts:
+            if num_pts != last_num_pts:
                 print(f'{num_pts} points left!')
                 print(f'valid indices: {valid_indices}')
             gx = np.array([self.gx_interp(p) for p in last_points], dtype=np.float32)
             gy = np.array([self.gy_interp(p) for p in last_points], dtype=np.float32)
             gz = np.array([self.gz_interp(p) for p in last_points], dtype=np.float32)
-
-            cur_points = GradAscent.perform_gA(np.array(last_points, dtype=np.float32).flatten(), gx.flatten(), gy.flatten(), gz.flatten(), num_pts).reshape(last_points.shape)
+            cur_points = GradAscent.perform_gA(last_points.T[0], last_points.T[1], last_points.T[2], gx.flatten(), gy.flatten(), gz.flatten(), self.c_xyz_mins, self.c_xyz_difs, self.c_grid_dims, num_pts).reshape(last_points.shape)
             for p in range(len(cur_points)):
                 index = valid_indices[p]
                 r_arr[index].append(self.pointDist(cur_points[p], last_points[p]) + r_arr[index][-1])
                 prog_arr[index].append(self.prog_interp(cur_points[p])[0])
-                # curv_arr[index].append(self.curv_interp(cur_points[p])[0])
-                # path_arr[index].append(list(cur_points[p]))
+                curv_arr[index].append(self.curv_interp(cur_points[p])[0])
+                path_arr[index].append(list(cur_points[p]))
                 temp_arr[index].append(self.temp_interp(cur_points[p])[0])
 
             last_points = cur_points
             last_num_pts = num_pts
 
-        # print(path_arr)
         num_pts = amr_coords.shape[0]
 
         point_to_plot = 0
