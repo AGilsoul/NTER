@@ -19,12 +19,7 @@ IntPtr = POINTER(c_int)
 lib_path = 'lib/GradAscent.dll'  # windows
 GradAscentLib = cdll.LoadLibrary(lib_path)
 gradAscent = GradAscentLib.getNextPoints
-gradAscent.argtypes = [FloatPtr,
-                               FloatPtr,
-                               FloatPtr,
-                               FloatPtr,
-                               c_int]
-gradAscent.restype = FloatPtr
+
 fillGrid = GradAscentLib.fillGrid
 fillGrid.argtypes = [FloatPtr,
                              FloatPtr,
@@ -96,7 +91,6 @@ class GradAscent:
 class AMRGrid:
     def __init__(self, data):
         self.amr_data = data
-        print(f'num points: {len(data)}')
         self.cell_pos = [self.amr_data['CellCenters:0'],
                          self.amr_data['CellCenters:1'],
                          self.amr_data['CellCenters:2']]
@@ -106,6 +100,7 @@ class AMRGrid:
         self.cell_prog = self.amr_data['progress_variable']
         self.cell_curv = self.amr_data['MeanCurvature_progress_variable']
         self.cell_temp = self.amr_data['temp']
+        self.cell_mix = self.amr_data['mixture_fraction']
         self.cell_validity = [1.0 for _ in range(len(self.amr_data))]
         self.x_range = None
         self.y_range = None
@@ -122,18 +117,20 @@ class AMRGrid:
         self.c_grid_dims = None
         self.setFilledAMRShape()
         self.amr_prog_grid = self.fillAMRGrid(self.amr_prog_grid, self.cell_prog, 'progress_variable')
+
         self.amr_curv_grid = self.fillAMRGrid(self.amr_curv_grid, self.cell_curv, 'curvature')
         self.amr_temp_grid = self.fillAMRGrid(self.amr_temp_grid, self.cell_temp, 'temp')
+        self.amr_mix_grid = self.fillAMRGrid(self.amr_mix_grid, self.cell_mix, 'mixture fraction')
         self.amr_gx_grid = self.fillAMRGrid(self.amr_gx_grid, self.cell_grads[0], 'grad x')
         self.amr_gy_grid = self.fillAMRGrid(self.amr_gy_grid, self.cell_grads[1], 'grad y')
         self.amr_gz_grid = self.fillAMRGrid(self.amr_gz_grid, self.cell_grads[2], 'grad z')
         self.amr_validity_grid = self.fillAMRGrid(self.amr_validity_grid, self.cell_validity, 'cell validity')
-
-        print('making interpolators')
+        print('making interpolators ...')
         interp_range = (self.x_range, self.y_range, self.z_range)
         self.prog_interp = RegularGridInterpolator(interp_range, self.amr_prog_grid)
         self.curv_interp = RegularGridInterpolator(interp_range, self.amr_curv_grid)
         self.temp_interp = RegularGridInterpolator(interp_range, self.amr_temp_grid)
+        self.mix_interp = RegularGridInterpolator(interp_range, self.amr_mix_grid)
         self.gx_interp = RegularGridInterpolator(interp_range, self.amr_gx_grid)
         self.gy_interp = RegularGridInterpolator(interp_range, self.amr_gy_grid)
         self.gz_interp = RegularGridInterpolator(interp_range, self.amr_gz_grid)
@@ -149,7 +146,6 @@ class AMRGrid:
 
         g = np.meshgrid(x, y, [z])
         points = np.vstack(list(map(np.ravel, g))).T
-        print(points.shape)
         return points
 
     def validPoint(self, p):
@@ -163,20 +159,27 @@ class AMRGrid:
     def pointDist(p1, p2):
         return np.sqrt(sum([(p1[i] - p2[i]) ** 2 for i in range(len(p1))]))
 
+    def nearestPointBelowProg(self, p, prog_val, search_thresh=0.0025):
+        # valid_indices = [i for i in range(len(self.cell_prog)) if self.cell_prog[i] <= prog_val]
+        valid_indices = self.amr_data.index[(self.amr_data['progress_variable'] <= prog_val) & (abs(self.amr_data['CellCenters:0'] - p[0]) < search_thresh) & (abs(self.amr_data['CellCenters:1'] - p[1]) < search_thresh) & (abs(self.amr_data['CellCenters:2'] - p[2]) < search_thresh)].tolist()
+        all_points = np.array(self.cell_pos).T
+        valid_points = [all_points[i] for i in valid_indices]
+        valid_points = list(filter(lambda x: self.validPoint(x), valid_points))
+
+        distances = [self.pointDist(p, valid_p) for valid_p in valid_points]
+
+        return valid_points[distances.index(min(distances))]
+
     def gradAscentPoint(self, amr_coords):
         amr_coords = np.array(amr_coords, dtype=np.float32)
         num_pts = amr_coords.shape[0]
-        print(f'Evaluating {num_pts} points ...')
-        xyz = [self.cellPosToGridIndex(i) for i in amr_coords]
-        cur_progs = [[self.amr_prog_grid[xyz[i][0]][xyz[i][1]][xyz[i][2]]] for i in range(num_pts)]
-        cur_curvs = [[self.amr_curv_grid[xyz[i][0]][xyz[i][1]][xyz[i][2]]] for i in range(num_pts)]
-        cur_temps = [[self.amr_temp_grid[xyz[i][0]][xyz[i][1]][xyz[i][2]]] for i in range(num_pts)]
+        cur_progs = [[self.prog_interp(p)[0]] for p in amr_coords]
+        cur_curvs = [[self.curv_interp(p)[0]] for p in amr_coords]
+        cur_temps = [[self.temp_interp(p)[0]] for p in amr_coords]
 
         r_arr = [[0] for _ in amr_coords]
-        path_arr = [[list(i)] for i in amr_coords]
         prog_arr = cur_progs
-        curv_arr = cur_curvs
-        temp_arr = cur_temps
+        path_arr = [[list(i)] for i in amr_coords]
 
         valid_indices = np.arange(0, num_pts)
 
@@ -184,7 +187,11 @@ class AMRGrid:
 
         last_num_pts = -1
 
+        iters = 0
+
         while True:
+            if iters % 100 == 0:
+                print(f'cur progress: {prog_arr[0][-1]}, {prog_arr[1][-1]}, {prog_arr[2][-1]}, ')
             p_to_remove = []
             for p in range(len(last_points)):
                 if not self.validPoint(last_points[p]) or prog_arr[p][-1] > 0.99:
@@ -205,32 +212,27 @@ class AMRGrid:
                 index = valid_indices[p]
                 r_arr[index].append(self.pointDist(cur_points[p], last_points[p]) + r_arr[index][-1])
                 prog_arr[index].append(self.prog_interp(cur_points[p])[0])
-                curv_arr[index].append(self.curv_interp(cur_points[p])[0])
-                path_arr[index].append(list(cur_points[p]))
-                temp_arr[index].append(self.temp_interp(cur_points[p])[0])
+                path_arr[index].append(cur_points[p])
 
             last_points = cur_points
             last_num_pts = num_pts
+            iters += 1
 
-        num_pts = amr_coords.shape[0]
+        return path_arr, r_arr, prog_arr
 
-        point_to_plot = 0
+    def interpolateAttr(self, path, attr):
+        interp = None
+        if attr == 'temp':
+            interp = self.temp_interp
+        elif attr == 'curvature':
+            interp = self.curv_interp
+        else:
+            interp = self.mix_interp
 
-        fig = plt.figure()
-        # self.pdf_2D(fig, 1, 1, 1, prog_arr[point_to_plot], temp_arr[point_to_plot], 'Progress Variable C', 'Temperature T')
-        plt.plot(prog_arr[point_to_plot], temp_arr[point_to_plot])
-        plt.xlabel('Progress Variable C')
-        plt.ylabel('Temperature T')
-        # H, x_edges, y_edges, bin_num = binned_statistic_2d(prog_arr[point_to_plot], values=curv_arr[p], statistic='mean', bins=[100, 100])
-        # H = np.ma.masked_invalid(H)
-        # XX, YY = np.meshgrid(x_edges, y_edges)
-        # p1 = ax.pcolormesh(XX, YY, H.T)
-        # cbar = fig.colorbar(p1, ax=ax, label='curvature')
-        # ax.set_xlabel('r')
-        # ax.set_ylabel('progress variable ')
-
-        fig.tight_layout()
-        plt.show()
+        attr_vals = []
+        for p in path:
+            attr_vals.append(interp(p)[0])
+        return attr_vals
 
     def fillAMRGrid(self, grid_to_fill, val_to_fill, val_name):
         print(f'filling {val_name} grid ...')
@@ -248,8 +250,9 @@ class AMRGrid:
                            self.c_xyz_difs,
                            self.c_grid_dims,
                            len(self.amr_data))
-
-        grid_to_fill = np.ctypeslib.as_array(res_pts, shape=(grid_size,)).reshape(grid_to_fill.shape)
+        shape = grid_to_fill.shape
+        grid_to_fill = np.ctypeslib.as_array(res_pts, shape=(grid_size,))
+        grid_to_fill = grid_to_fill.reshape(shape, order='F')
         print('Done!')
         return grid_to_fill
 
@@ -277,6 +280,7 @@ class AMRGrid:
         self.amr_prog_grid = np.zeros(self.amr_shape)
         self.amr_curv_grid = np.zeros(self.amr_shape)
         self.amr_temp_grid = np.zeros(self.amr_shape)
+        self.amr_mix_grid = np.zeros(self.amr_shape)
         self.amr_gx_grid = np.zeros(self.amr_shape)
         self.amr_gy_grid = np.zeros(self.amr_shape)
         self.amr_gz_grid = np.zeros(self.amr_shape)
@@ -316,6 +320,19 @@ class AMRGrid:
         return
 
     @staticmethod
+    def plot_against_2D_mult(fig, r, c, i, xd, yd, z, xlabel, ylabel, zlabel):
+        ax = fig.add_subplot(r, c, i)
+        for x in range(len(xd)):
+            H, x_edges, y_edges, bin_num = binned_statistic_2d(xd[x], yd[x], values=z[x], statistic='mean', bins=[500, 500])
+            H = np.ma.masked_invalid(H)
+            XX, YY = np.meshgrid(x_edges, y_edges)
+            p1 = ax.pcolormesh(XX, YY, H.T)
+            cbar = fig.colorbar(p1, ax=ax, label=zlabel)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        return
+
+    @staticmethod
     def pdf_2D(fig, r, c, i, xd, yd, xlabel, ylabel):
         white_viridis = LinearSegmentedColormap.from_list('white_viridis', [
             (0, '#ffffff'),
@@ -336,13 +353,60 @@ class AMRGrid:
         return
 
 
-if __name__ == '__main__':
-    # CSVtoPKL('combGradCurv01929Data')
-    file_name = 'res/combGradCurv01929Data.pkl'
+def PresFlamePaths3D():
+    # CSVtoPKL('combGradCurv01930Data')
+    file_name = 'res/combGradCurv01930Data.pkl'
     print(f'Reading {file_name} ...')
     amr_data = pd.read_pickle(file_name)
     print(amr_data.columns)
     print(f'Setting up grid ...')
     grid = AMRGrid(amr_data)
-    coords = grid.getGACoords()
-    grid.gradAscentPoint(coords)
+    high_flux_pt = [0.0185, 0.011, 0.0105]
+    med_flux_pt = [0.01875, 0.0215, 0.0145]
+    low_flux_pt = [0.017, 0.02075, 0.016]
+    coords = [high_flux_pt,
+              med_flux_pt,
+              low_flux_pt]
+    path, r, prog = grid.gradAscentPoint(coords)
+    print('done with gradient path, interpolating...')
+    high_flux_path, med_flux_path, low_flux_path = path[0], path[1], path[2]
+    high_flux_r, med_flux_r, low_flux_r = r[0], r[1], r[2]
+    print('temp...')
+    high_flux_temp = grid.interpolateAttr(high_flux_path, 'temp')
+    med_flux_temp = grid.interpolateAttr(med_flux_path, 'temp')
+    low_flux_temp = grid.interpolateAttr(low_flux_path, 'temp')
+    print('mix...')
+    high_flux_mix = grid.interpolateAttr(high_flux_path, '')
+    med_flux_mix = grid.interpolateAttr(med_flux_path, '')
+    low_flux_mix = grid.interpolateAttr(low_flux_path, '')
+    prog_flat = prog[0]
+    prog_flat.extend(prog[1])
+    prog_flat.extend(prog[2])
+    temp_flat = high_flux_temp
+    temp_flat.extend(med_flux_temp)
+    temp_flat.extend(low_flux_temp)
+    mix_flat = high_flux_mix
+    mix_flat.extend(med_flux_mix)
+    mix_flat.extend(low_flux_mix)
+
+    df = pd.DataFrame(list(zip(path[0], path[1], path[2], r[0], r[1], r[2], prog[0], prog[1], prog[2], high_flux_temp, med_flux_temp, low_flux_temp, high_flux_mix, med_flux_mix, low_flux_mix)),
+                      columns=['hf path', 'mf path', 'lf path', 'hf r', 'mf r', 'lf r', 'hf prog', 'mf prog', 'lf prog', 'hf temp', 'mf temp', 'lf temp', 'hf mix', 'mf mix', 'lf mix'])
+    pd.to_pickle(df, 'res/FlamePaths.pkl')
+
+    fig = plt.figure()
+    grid.plot_against_2D(fig, 1, 1, 1, prog_flat, temp_flat, mix_flat, 'progress variable c', 'temperature T (k)', 'mixture fraction Z')
+    plt.show()
+
+
+if __name__ == '__main__':
+    PresFlamePaths3D()
+
+    # amr_data = amr_data.sample(10000)
+    #iso_surface = amr_data[(amr_data['progress_variable'] <= 0.81) & (amr_data['progress_variable'] >= 0.79)]
+    #fig = plt.figure()
+    #ax = fig.add_subplot(projection='3d')
+    #ax.scatter(iso_surface['CellCenters:0'], iso_surface['CellCenters:1'], iso_surface['CellCenters:2'])
+    #ax.set_xlim(0, 0.032)
+    #ax.set_ylim(0, 0.032)
+    #ax.set_zlim(0, 0.032)
+    #plt.show()
