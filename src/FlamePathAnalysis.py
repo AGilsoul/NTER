@@ -5,24 +5,29 @@ import itertools
 
 # AFT=1428.5 K
 
+
 def main():
     path_data = pd.read_pickle('res/FlamePaths.pkl')
-    high_flux = [col for col in path_data if col.startswith('hf')]
-    med_flux = [col for col in path_data if col.startswith('mf')]
-    low_flux = [col for col in path_data if col.startswith('lf')]
+    high_flux = path_data[path_data['flux'] == 'hf']
+    med_flux = path_data[path_data['flux'] == 'mf']
+    low_flux = path_data[path_data['flux'] == 'lf']
 
-    prog = list(itertools.chain.from_iterable([path_data[col].values for col in path_data if col.endswith('prog')]))
-    temp = list(itertools.chain.from_iterable([path_data[col].values for col in path_data if col.endswith('temp')]))
-    mix = list(itertools.chain.from_iterable([path_data[col].values for col in path_data if col.endswith('mix')]))
+    prog = path_data['prog'].values
+    temp = path_data['temp'].values
+    mix = path_data['mix'].values
 
     print(f'high flux:\n{high_flux}')
     print(f'med flux:\n{med_flux}')
     print(f'low flux:\n{low_flux}')
-    fig = plt.figure()
-    plot_against_2D(fig, 1, 1, 1, prog, temp, mix, 'progress variable c', 'temperature T (k)', 'mixture fraction Z')
+
+    fig= plt.figure()
+    ax = fig.add_subplot(projection='scatter_density')
+    # ax = fig.add_subplot()
+
+    plot_against_2D(fig, ax, prog, temp, mix, 'progress variable c', 'temperature T (k)', 'mixture fraction Z')
 
     # ax = fig.add_subplot(1, 1, 1)
-    # ax.axhline(y=1428.5, color='r', linestyle='-')
+    ax.axhline(y=1428.5, color='r', linestyle='-')
     plt.show()
     return
 

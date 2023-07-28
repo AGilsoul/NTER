@@ -388,9 +388,16 @@ def PresFlamePaths3D():
     mix_flat = high_flux_mix
     mix_flat.extend(med_flux_mix)
     mix_flat.extend(low_flux_mix)
+    flux_values = []
+    for i in high_flux_path:
+        flux_values.append('hf')
+    for i in med_flux_path:
+        flux_values.append('mf')
+    for i in low_flux_path:
+        flux_values.append('lf')
 
-    df = pd.DataFrame(list(zip(path[0], path[1], path[2], r[0], r[1], r[2], prog[0], prog[1], prog[2], high_flux_temp, med_flux_temp, low_flux_temp, high_flux_mix, med_flux_mix, low_flux_mix)),
-                      columns=['hf path', 'mf path', 'lf path', 'hf r', 'mf r', 'lf r', 'hf prog', 'mf prog', 'lf prog', 'hf temp', 'mf temp', 'lf temp', 'hf mix', 'mf mix', 'lf mix'])
+    df = pd.DataFrame(list(zip(flux_values, prog_flat, temp_flat, mix_flat)),
+                      columns=['flux', 'prog', 'temp', 'mix'])
     pd.to_pickle(df, 'res/FlamePaths.pkl')
 
     fig = plt.figure()
