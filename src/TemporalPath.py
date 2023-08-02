@@ -22,7 +22,7 @@ testRun.argtypes = [IntPtr,
                     IntPtr,
                     IntPtr,
                     c_int]
-testRun.restype = c_void_p
+testRun.restype = c_int
 
 
 def main():
@@ -31,27 +31,49 @@ def main():
     t, data = ReadDat(file_name)
     print(f'Surface at t={t}:')
     print(data)
-    X = data['X'].values
-    Y = data['Y'].values
-    Z = data['Z'].values
+    x = data['X'].values
+    y = data['Y'].values
+    z = data['Z'].values
 
-    points = np.array([X, Y]).T
+    points = np.array([x, y]).T
     print(f'points:\n{points}')
     tri = Delaunay(points)
-    new_pts = np.array([X, Y, Z]).T
+    new_pts = np.array([x, y, z]).T
     simplex_vertices = new_pts[tri.simplices]
+    print(f'simplex indices:\n{tri.simplices}')
     print(f'simplices:\n{simplex_vertices}')
     num_pts = len(new_pts)
     num_simplices = len(simplex_vertices)
     print(f'num points: {num_pts}')
     print(f'num simplices: {num_simplices}')
 
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1, projection='3d')
+    u = data['x_velocity'].values
+    v = data['y_velocity'].values
+    w = data['z_velocity'].values
+    gx = data['progress_variable_gx'].values
+    gy = data['progress_variable_gy'].values
+    gz = data['progress_variable_gz'].values
+    contour_times = np.array([t])
+    simpPer = np.array([num_simplices])
+    partPer = np.array([num_pts])
+    num_surfaces = 1
 
-    ax.plot_trisurf(X, Y, Z, triangles=tri.simplices, cmap=plt.cm.Spectral)
-    plt.show()
+    flat_simplices = tri.simplices.flatten()
+    X = new_pts.flatten()
+    U = np.array([u, v, w]).T.flatten()
+    grad = np.array([gx, gy, gz]).T.flatten()
 
+    c_simplicies = flat_simplices.ctypes.data_as(IntPtr)
+    c_X = X.ctypes.data_as(FloatPtr)
+    c_U = U.ctypes.data_as(FloatPtr)
+    c_grad = grad.ctypes.data_as(FloatPtr)
+    c_times = contour_times.ctypes.data_as(FloatPtr)
+    c_simp_per = simpPer.ctypes.data_as(IntPtr)
+    c_part_per = partPer.ctypes.data_as(IntPtr)
+
+    print('\ntest run ...\n')
+    testRun(c_simplicies, c_X, c_U, c_grad, c_times, c_simp_per, c_part_per, num_surfaces)
+    print('Done!')
     return
 
 
