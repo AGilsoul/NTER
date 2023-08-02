@@ -4,16 +4,35 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+def computeProgVar(Y_H2):
+    Y_H2_u = 0.011608
+    res = []
+    for y in Y_H2:
+        res.append(1 - (y/Y_H2_u))
+    return res
+
+
+def computeMixFrac(Y_H2, Y_O2):
+    res = []
+    for i in range(len(Y_H2)):
+        res.append(0.011608)
+    return res
+
+
 def compute1DFlame():
     gas = ct.Solution('res/LiDryer.yaml')
     gas.set_equivalence_ratio(phi=0.4, fuel="H2:1.0", oxidizer="O2:1.0,N2:3.76")
     gas.TP = 300, ct.one_atm
+    # gas.equilibrate('HP')
+    # gas()
+    grid = np.linspace(0, 0.0012, 999)
+    flame = ct.FreeFlame(gas, grid=grid)
+    flame.transport_model = 'Multi'
+    flame.solve(loglevel=0, auto=True)
+    Y_H2 = flame.Y[0]
+    Y_O2 = flame.Y[1]
 
-    gas.equilibrate('HP')
-    gas()
-    # flame = ct.FreeFlame(gas, width=0.032)
-    # flame.transport_model = 'Multi'
-    return
+    return list(flame.T), list(computeProgVar(Y_H2)), list(computeMixFrac(Y_H2, Y_O2)), list(grid)
 
 
 def compute1DStrain():

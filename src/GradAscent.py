@@ -7,10 +7,13 @@ import mpl_scatter_density
 from matplotlib.colors import LinearSegmentedColormap
 from scipy.interpolate import RegularGridInterpolator
 import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
 from scipy.stats import binned_statistic_2d
 import sys
+import itertools
 
 from csvToPkl import CSVtoPKL
+from src.Cantera import compute1DFlame
 
 FloatPtr = POINTER(c_float)
 IntPtr = POINTER(c_int)
@@ -101,6 +104,7 @@ class AMRGrid:
         self.cell_curv = self.amr_data['MeanCurvature_progress_variable']
         self.cell_temp = self.amr_data['temp']
         self.cell_mix = self.amr_data['mixture_fraction']
+        self.cell_strainrate = self.amr_data['StrainRate_progress_variable']
         self.cell_validity = [1.0 for _ in range(len(self.amr_data))]
         self.x_range = None
         self.y_range = None
@@ -117,7 +121,7 @@ class AMRGrid:
         self.c_grid_dims = None
         self.setFilledAMRShape()
         self.amr_prog_grid = self.fillAMRGrid(self.amr_prog_grid, self.cell_prog, 'progress_variable')
-
+        self.amr_strainrate_grid = self.fillAMRGrid(self.amr_strainrate_grid, self.cell_strainrate, 'strain rate')
         self.amr_curv_grid = self.fillAMRGrid(self.amr_curv_grid, self.cell_curv, 'curvature')
         self.amr_temp_grid = self.fillAMRGrid(self.amr_temp_grid, self.cell_temp, 'temp')
         self.amr_mix_grid = self.fillAMRGrid(self.amr_mix_grid, self.cell_mix, 'mixture fraction')
@@ -128,6 +132,7 @@ class AMRGrid:
         print('making interpolators ...')
         interp_range = (self.x_range, self.y_range, self.z_range)
         self.prog_interp = RegularGridInterpolator(interp_range, self.amr_prog_grid)
+        self.strainrate_interp = RegularGridInterpolator(interp_range, self.amr_strainrate_grid)
         self.curv_interp = RegularGridInterpolator(interp_range, self.amr_curv_grid)
         self.temp_interp = RegularGridInterpolator(interp_range, self.amr_temp_grid)
         self.mix_interp = RegularGridInterpolator(interp_range, self.amr_mix_grid)
@@ -152,8 +157,9 @@ class AMRGrid:
         x_in_grid = self.pos_lims[0][1] > p[0] >= self.pos_lims[0][0]
         y_in_grid = self.pos_lims[1][1] > p[1] >= self.pos_lims[1][0]
         z_in_grid = self.pos_lims[2][1] > p[2] >= self.pos_lims[2][0]
-        valid_cell = self.valid_interp(p) != 0.0
-        return x_in_grid and y_in_grid and z_in_grid and valid_cell
+        if x_in_grid and y_in_grid and z_in_grid:
+            return self.valid_interp(p) != 0.0
+        return False
 
     @staticmethod
     def pointDist(p1, p2):
@@ -170,7 +176,7 @@ class AMRGrid:
 
         return valid_points[distances.index(min(distances))]
 
-    def gradAscentPoint(self, amr_coords):
+    def gradAscentPoint(self, amr_coords, c_lim=0.99):
         amr_coords = np.array(amr_coords, dtype=np.float32)
         num_pts = amr_coords.shape[0]
         cur_progs = [[self.prog_interp(p)[0]] for p in amr_coords]
@@ -179,6 +185,7 @@ class AMRGrid:
 
         r_arr = [[0] for _ in amr_coords]
         prog_arr = cur_progs
+        curv_arr = cur_curvs
         path_arr = [[list(i)] for i in amr_coords]
 
         valid_indices = np.arange(0, num_pts)
@@ -190,11 +197,13 @@ class AMRGrid:
         iters = 0
 
         while True:
-            if iters % 100 == 0:
-                print(f'cur progress: {prog_arr[0][-1]}, {prog_arr[1][-1]}, {prog_arr[2][-1]}, ')
+            if iters % 1000 == 0:
+                print(f'cur progress: {prog_arr[0][-1]}, {prog_arr[1][-1]}, {prog_arr[2][-1]}')
+                print(f'cur curv: {curv_arr[0][-1]}, {curv_arr[1][-1]}, {curv_arr[2][-1]}')
+
             p_to_remove = []
             for p in range(len(last_points)):
-                if not self.validPoint(last_points[p]) or prog_arr[p][-1] > 0.99:
+                if not self.validPoint(last_points[p]) or prog_arr[valid_indices[p]][-1] > c_lim:
                     p_to_remove.append(p)
             valid_indices = np.delete(valid_indices, p_to_remove)
             last_points = np.delete(last_points, p_to_remove, axis=0)
@@ -209,10 +218,21 @@ class AMRGrid:
             gz = np.array([self.gz_interp(p) for p in last_points], dtype=np.float32)
             cur_points = GradAscent.perform_gA(last_points.T[0], last_points.T[1], last_points.T[2], gx.flatten(), gy.flatten(), gz.flatten(), self.c_xyz_mins, self.c_xyz_difs, self.c_grid_dims, num_pts).reshape(last_points.shape)
             for p in range(len(cur_points)):
-                index = valid_indices[p]
-                r_arr[index].append(self.pointDist(cur_points[p], last_points[p]) + r_arr[index][-1])
-                prog_arr[index].append(self.prog_interp(cur_points[p])[0])
-                path_arr[index].append(cur_points[p])
+                try:
+                    index = valid_indices[p]
+                    prog = self.prog_interp(cur_points[p])[0]
+                    curv = self.curv_interp(cur_points[p])[0]
+                    r_arr[index].append(self.pointDist(cur_points[p], last_points[p]) + r_arr[index][-1])
+                    prog_arr[index].append(prog)
+                    curv_arr[index].append(curv)
+                    path_arr[index].append(cur_points[p])
+                except ValueError:
+                    index = valid_indices[p]
+                    r_arr[index].pop()
+                    prog_arr[index].pop()
+                    curv_arr[index].pop()
+                    path_arr[index].pop()
+                    print(f'point {cur_points[p]} out of range')
 
             last_points = cur_points
             last_num_pts = num_pts
@@ -226,6 +246,8 @@ class AMRGrid:
             interp = self.temp_interp
         elif attr == 'curvature':
             interp = self.curv_interp
+        elif attr == 'strainrate':
+            interp = self.strainrate_interp
         else:
             interp = self.mix_interp
 
@@ -278,6 +300,7 @@ class AMRGrid:
         self.amr_shape = np.array([round((self.pos_lims[i][1] - self.pos_lims[i][0]) / self.pos_dif[i]) + 1 for i in range(3)], dtype=np.int32)
 
         self.amr_prog_grid = np.zeros(self.amr_shape)
+        self.amr_strainrate_grid = np.zeros(self.amr_shape)
         self.amr_curv_grid = np.zeros(self.amr_shape)
         self.amr_temp_grid = np.zeros(self.amr_shape)
         self.amr_mix_grid = np.zeros(self.amr_shape)
@@ -307,14 +330,39 @@ class AMRGrid:
         return np.array(d, dtype=np.int32).ctypes.data_as(IntPtr)
 
     @staticmethod
-    def plot_against_2D(fig, r, c, i, xd, yd, z, xlabel, ylabel, zlabel):
-        z = [d if d >= 0 else 0 for d in z]
+    def movingAverage(data, window_size):
+        cumsum_vec = np.cumsum(np.insert(data, 0, 0))
+        return (cumsum_vec[window_size:] - cumsum_vec[:-window_size]) / window_size
+
+    @staticmethod
+    def plot_against_2D(fig, r, c, i, xd, yd, z, xlabel, ylabel, zlabel, overlay_x=None, overlay_y=None, overlay_label=''):
+        # z = [d if d >= 0 else 0 for d in z]
         ax = fig.add_subplot(r, c, i)
         H, x_edges, y_edges, bin_num = binned_statistic_2d(xd, yd, values=z, statistic='mean', bins=[500, 500])
-        H = np.ma.masked_invalid(H)
+        print(H)
+        H_masked = np.ma.masked_invalid(H).copy()
         XX, YY = np.meshgrid(x_edges, y_edges)
-        p1 = ax.pcolormesh(XX, YY, H.T)
+        p1 = ax.pcolormesh(XX, YY, H_masked.T)
         cbar = fig.colorbar(p1, ax=ax, label=zlabel)
+        if overlay_x is not None and overlay_y is not None:
+            H_t, x_edges_t, y_edges_t, bin_num_t = binned_statistic_2d(xd, yd, values=yd, statistic='mean',
+                                                                       bins=[1000, 1000])
+            print(x_edges_t)
+            print(y_edges_t)
+            y_av = []
+            for col in range(len(x_edges_t)-1):
+                y_av.append(np.nansum(H_t[col])/np.count_nonzero(~np.isnan(H_t[col])))
+
+            print(y_av)
+            y_av = savgol_filter(y_av, 100, 3)
+            # x_av = AMRGrid.movingAverage(x_edges, 10)
+            # print(x_av)
+            # y_av = AMRGrid.movingAverage(y_edges, 10)
+            # print(y_av)
+            ax.plot(x_edges_t[1:], y_av, label='Average', linewidth=2, color='black')
+            ax.plot(overlay_x, overlay_y, label=overlay_label, color='r', linewidth=2, linestyle='dashed')
+            ax.axhline(y=1428.5, color='black', label='AFT', linewidth=2, linestyle='dashed')
+        ax.set_xlim(0, 1)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         return
@@ -333,7 +381,7 @@ class AMRGrid:
         return
 
     @staticmethod
-    def pdf_2D(fig, r, c, i, xd, yd, xlabel, ylabel):
+    def pdf_2D(fig, r, c, i, xd, yd, xlabel, ylabel, overlay_x=None, overlay_y=None, overlay_label=''):
         white_viridis = LinearSegmentedColormap.from_list('white_viridis', [
             (0, '#ffffff'),
             (1e-20, '#440053'),
@@ -348,6 +396,10 @@ class AMRGrid:
                                      norm=matplotlib.colors.SymLogNorm(linthresh=0.03))
         fig.colorbar(density, label='Number of points per pixel')
 
+        if overlay_x is not None and overlay_y is not None:
+            ax.plot(overlay_x, overlay_y, label=overlay_label, color='r', linestyle='dashed')
+            ax.axhline(y=1428.5, color='black', label='AFT', linestyle='dashed')
+
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         return
@@ -361,16 +413,23 @@ def PresFlamePaths3D():
     print(amr_data.columns)
     print(f'Setting up grid ...')
     grid = AMRGrid(amr_data)
-    high_flux_pt = [0.0185, 0.011, 0.0105]
-    med_flux_pt = [0.01875, 0.0215, 0.0145]
-    low_flux_pt = [0.017, 0.02075, 0.016]
+    high_flux_pt = [0.01725, 0.01875, 0.01275]
+    # med_flux_pt = [0.0224, 0.0136293, 0.0119005]
+    med_flux_pt = [0.0261804, 0.0289737, 0.0146741]
+    low_flux_pt = [0.015644, 0.020422, 0.0157]
+    # low_flux_pt = [0.0155955, 0.020262, 0.0160572]
+
     coords = [high_flux_pt,
               med_flux_pt,
               low_flux_pt]
-    path, r, prog = grid.gradAscentPoint(coords)
+    path, r, prog = grid.gradAscentPoint(coords, c_lim=0.9999)
     print('done with gradient path, interpolating...')
     high_flux_path, med_flux_path, low_flux_path = path[0], path[1], path[2]
     high_flux_r, med_flux_r, low_flux_r = r[0], r[1], r[2]
+    print('pre interpolate lens')
+    print(f'path 0 len: {len(high_flux_path)}')
+    print(f'path 1 len: {len(med_flux_path)}')
+    print(f'path 2 len: {len(low_flux_path)}')
     print('temp...')
     high_flux_temp = grid.interpolateAttr(high_flux_path, 'temp')
     med_flux_temp = grid.interpolateAttr(med_flux_path, 'temp')
@@ -379,25 +438,44 @@ def PresFlamePaths3D():
     high_flux_mix = grid.interpolateAttr(high_flux_path, '')
     med_flux_mix = grid.interpolateAttr(med_flux_path, '')
     low_flux_mix = grid.interpolateAttr(low_flux_path, '')
-    prog_flat = prog[0]
-    prog_flat.extend(prog[1])
-    prog_flat.extend(prog[2])
-    temp_flat = high_flux_temp
-    temp_flat.extend(med_flux_temp)
-    temp_flat.extend(low_flux_temp)
-    mix_flat = high_flux_mix
-    mix_flat.extend(med_flux_mix)
-    mix_flat.extend(low_flux_mix)
-    flux_values = []
-    for i in high_flux_path:
-        flux_values.append('hf')
-    for i in med_flux_path:
-        flux_values.append('mf')
-    for i in low_flux_path:
-        flux_values.append('lf')
+    print('curv...')
+    high_flux_curv = grid.interpolateAttr(high_flux_path, 'curvature')
+    med_flux_curv = grid.interpolateAttr(med_flux_path, 'curvature')
+    low_flux_curv = grid.interpolateAttr(low_flux_path, 'curvature')
+    print('strainrate...')
+    high_flux_strainrate= grid.interpolateAttr(high_flux_path, 'strainrate')
+    med_flux_strainrate = grid.interpolateAttr(med_flux_path, 'strainrate')
+    low_flux_strainrate = grid.interpolateAttr(low_flux_path, 'strainrate')
 
-    df = pd.DataFrame(list(zip(flux_values, prog_flat, temp_flat, mix_flat)),
-                      columns=['flux', 'prog', 'temp', 'mix'])
+    print('post interpolate lens')
+    print(f'path 0 len: {len(high_flux_path)}')
+    print(f'path 1 len: {len(med_flux_path)}')
+    print(f'path 2 len: {len(low_flux_path)}')
+
+    path_flat = list(itertools.chain(high_flux_path, med_flux_path, low_flux_path))
+    r_flat = list(itertools.chain(high_flux_r, med_flux_r, low_flux_r))
+    prog_flat = list(itertools.chain(prog[0], prog[1], prog[2]))
+    temp_flat = list(itertools.chain(high_flux_temp, med_flux_temp, low_flux_temp))
+    mix_flat = list(itertools.chain(high_flux_mix, med_flux_mix, low_flux_mix))
+    curv_flat = list(itertools.chain(high_flux_curv, med_flux_curv, low_flux_curv))
+    strainrate_flat = list(itertools.chain(high_flux_strainrate, med_flux_strainrate, low_flux_strainrate))
+
+    print('post extension lens')
+    print(f'path 0 len: {len(high_flux_path)}')
+    print(f'path 1 len: {len(med_flux_path)}')
+    print(f'path 2 len: {len(low_flux_path)}')
+
+    flux_values = []
+    for _ in high_flux_path:
+        flux_values.append('hf')
+    for _ in med_flux_path:
+        flux_values.append('mf')
+    for _ in low_flux_path:
+        flux_values.append('lf')
+    print(f'num flux vals: {len(flux_values)}')
+    print(f'length of path: {len(path_flat)}')
+    df = pd.DataFrame(list(zip(path_flat, r_flat, flux_values, prog_flat, temp_flat, mix_flat, curv_flat, strainrate_flat)),
+                      columns=['path', 'r', 'flux', 'prog', 'temp', 'mix', 'curv', 'strainrate'])
     pd.to_pickle(df, 'res/FlamePaths.pkl')
 
     fig = plt.figure()
@@ -406,8 +484,19 @@ def PresFlamePaths3D():
 
 
 if __name__ == '__main__':
-    PresFlamePaths3D()
+    # PresFlamePaths3D()
 
+    file_name = 'res/combGradCurv01930Data.pkl'
+    print(f'Reading {file_name} ...')
+    amr_data = pd.read_pickle(file_name)
+    print(amr_data.columns)
+    fig = plt.figure(figsize=(15, 15))
+    matplotlib.rcParams.update({'font.size': 22})
+    cantera_temp, cantera_c, cantera_z, grid = compute1DFlame()
+    # AMRGrid.pdf_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['temp'], 'Progress Variable c', 'Temperature T (K)', cantera_c, cantera_temp, 'Cantera 1D')
+    AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['temp'], amr_data['MeanCurvature_progress_variable'], 'Progress Variable c', 'Temperature T (K)', 'Curvature K (1/m)', overlay_x=cantera_c, overlay_y=cantera_temp, overlay_label='Cantera 1D')
+    plt.legend(loc='lower right')
+    plt.show()
     # amr_data = amr_data.sample(10000)
     #iso_surface = amr_data[(amr_data['progress_variable'] <= 0.81) & (amr_data['progress_variable'] >= 0.79)]
     #fig = plt.figure()
