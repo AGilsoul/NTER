@@ -6,7 +6,6 @@ replace_text = '_'
 
 
 def formatDAT(file_name):
-    print(f'Editing {file_name} ...')
     with open(file_name, 'r') as file:
         data = file.readlines()
         lines_to_add = []
@@ -18,4 +17,3 @@ def formatDAT(file_name):
 
     with open(file_name, 'w') as file:
         file.writelines(lines_to_add)
-    print('done')
