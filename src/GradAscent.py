@@ -492,9 +492,11 @@ if __name__ == '__main__':
     print(amr_data.columns)
     fig = plt.figure(figsize=(15, 15))
     matplotlib.rcParams.update({'font.size': 22})
-    cantera_temp, cantera_c, cantera_z, grid = compute1DFlame()
+    # cantera_temp, cantera_c, cantera_z, grid = compute1DFlame()
     # AMRGrid.pdf_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['temp'], 'Progress Variable c', 'Temperature T (K)', cantera_c, cantera_temp, 'Cantera 1D')
-    AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['temp'], amr_data['MeanCurvature_progress_variable'], 'Progress Variable c', 'Temperature T (K)', 'Curvature K (1/m)', overlay_x=cantera_c, overlay_y=cantera_temp, overlay_label='Cantera 1D')
+    # AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['MeanCurvature_progress_variable'], amr_data['temp'], 'Progress Variable c', 'Curvature K (1/m)', 'Temperature T (K)', overlay_x=cantera_c, overlay_y=cantera_temp, overlay_label='Cantera 1D')
+    AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['MeanCurvature_progress_variable'], amr_data['temp'], 'Progress Variable c', 'Curvature K (1/m)', 'Temperature T (K)')
+
     plt.legend(loc='lower right')
     plt.show()
     # amr_data = amr_data.sample(10000)

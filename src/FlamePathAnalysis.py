@@ -31,7 +31,7 @@ def main():
     mix = list(path_data['mix'].values)
     # print(f'num prog vars: {len(prog)}')
 
-    fig= plt.figure(figsize=(15, 15))
+    fig = plt.figure(figsize=(15, 15))
     matplotlib.rcParams.update({'font.size': 22})
     # ax = fig.add_subplot(projection='scatter_density')
     ax = fig.add_subplot(1, 1, 1)

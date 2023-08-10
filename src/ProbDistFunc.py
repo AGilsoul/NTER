@@ -16,9 +16,9 @@ white_viridis = LinearSegmentedColormap.from_list('white_viridis', [
 ], N=256)
 
 
-def plot_against_2D(fig, ax, xd, yd, z, xlabel, ylabel, zlabel):
+def plot_against_2D(fig, ax, xd, yd, z, xlabel, ylabel, zlabel, bins=[500, 500]):
     # z = [d if d >= 0 else 0 for d in z]
-    H, x_edges, y_edges, bin_num = binned_statistic_2d(xd, yd, values=z, statistic='mean', bins=[500, 500])
+    H, x_edges, y_edges, bin_num = binned_statistic_2d(xd, yd, values=z, statistic='mean', bins=bins)
     H = np.ma.masked_invalid(H)
     XX, YY = np.meshgrid(x_edges, y_edges)
     p1 = ax.pcolormesh(XX, YY, H.T)
@@ -28,8 +28,8 @@ def plot_against_2D(fig, ax, xd, yd, z, xlabel, ylabel, zlabel):
     return
 
 
-def pdf_2D(fig, ax, xd, yd, xlabel, ylabel):
-    density = ax.scatter_density(xd, yd, cmap=white_viridis, dpi=70, norm=matplotlib.colors.SymLogNorm(linthresh=0.03))
+def pdf_2D(fig, ax, xd, yd, xlabel, ylabel, dpi=70):
+    density = ax.scatter_density(xd, yd, cmap=white_viridis, dpi=dpi, norm=matplotlib.colors.SymLogNorm(linthresh=0.03))
     fig.colorbar(density, label='Number of points per pixel')
 
     ax.set_xlabel(xlabel)
