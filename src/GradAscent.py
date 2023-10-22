@@ -336,24 +336,24 @@ class AMRGrid:
 
     @staticmethod
     def plot_against_2D(fig, r, c, i, xd, yd, z, xlabel, ylabel, zlabel, overlay_x=None, overlay_y=None, overlay_label=''):
+        print(xd)
+        print(yd)
+        print(z)
         # z = [d if d >= 0 else 0 for d in z]
         ax = fig.add_subplot(r, c, i)
         H, x_edges, y_edges, bin_num = binned_statistic_2d(xd, yd, values=z, statistic='mean', bins=[500, 500])
-        print(H)
         H_masked = np.ma.masked_invalid(H).copy()
         XX, YY = np.meshgrid(x_edges, y_edges)
         p1 = ax.pcolormesh(XX, YY, H_masked.T)
         cbar = fig.colorbar(p1, ax=ax, label=zlabel)
+        '''
         if overlay_x is not None and overlay_y is not None:
             H_t, x_edges_t, y_edges_t, bin_num_t = binned_statistic_2d(xd, yd, values=yd, statistic='mean',
                                                                        bins=[1000, 1000])
-            print(x_edges_t)
-            print(y_edges_t)
             y_av = []
+            print('doing overlay')
             for col in range(len(x_edges_t)-1):
                 y_av.append(np.nansum(H_t[col])/np.count_nonzero(~np.isnan(H_t[col])))
-
-            print(y_av)
             y_av = savgol_filter(y_av, 100, 3)
             # x_av = AMRGrid.movingAverage(x_edges, 10)
             # print(x_av)
@@ -362,7 +362,8 @@ class AMRGrid:
             ax.plot(x_edges_t[1:], y_av, label='Average', linewidth=2, color='black')
             ax.plot(overlay_x, overlay_y, label=overlay_label, color='r', linewidth=2, linestyle='dashed')
             ax.axhline(y=1428.5, color='black', label='AFT', linewidth=2, linestyle='dashed')
-        ax.set_xlim(0, 1)
+        '''
+        # ax.set_xlim(0, 1)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         return
@@ -381,7 +382,7 @@ class AMRGrid:
         return
 
     @staticmethod
-    def pdf_2D(fig, r, c, i, xd, yd, xlabel, ylabel, overlay_x=None, overlay_y=None, overlay_label=''):
+    def pdf_2D(fig, r, c, i, xd, yd, xlabel, ylabel, dpi=70, overlay_x=None, overlay_y=None, overlay_label=''):
         white_viridis = LinearSegmentedColormap.from_list('white_viridis', [
             (0, '#ffffff'),
             (1e-20, '#440053'),
@@ -392,7 +393,7 @@ class AMRGrid:
             (1, '#fde624'),
         ], N=256)
         ax = fig.add_subplot(r, c, i, projection='scatter_density')
-        density = ax.scatter_density(xd, yd, cmap=white_viridis, dpi=70,
+        density = ax.scatter_density(xd, yd, cmap=white_viridis, dpi=dpi,
                                      norm=matplotlib.colors.SymLogNorm(linthresh=0.03))
         fig.colorbar(density, label='Number of points per pixel')
 
@@ -486,18 +487,22 @@ def PresFlamePaths3D():
 if __name__ == '__main__':
     # PresFlamePaths3D()
 
-    file_name = 'res/combGradCurv01930Data.pkl'
+    file_name = 'res/01920Lev3.pkl'
     print(f'Reading {file_name} ...')
     amr_data = pd.read_pickle(file_name)
+    amr_data = amr_data[(amr_data['progress_variable'] < 0.81) & (amr_data['progress_variable'] > 0.79)]
     print(amr_data.columns)
-    fig = plt.figure(figsize=(15, 15))
-    matplotlib.rcParams.update({'font.size': 22})
+    print(len(amr_data))
+    # fig = plt.figure(figsize=(15, 15))
+    fig = plt.figure()
+    # matplotlib.rcParams.update({'font.size': 22})
     # cantera_temp, cantera_c, cantera_z, grid = compute1DFlame()
-    # AMRGrid.pdf_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['temp'], 'Progress Variable c', 'Temperature T (K)', cantera_c, cantera_temp, 'Cantera 1D')
-    # AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['MeanCurvature_progress_variable'], amr_data['temp'], 'Progress Variable c', 'Curvature K (1/m)', 'Temperature T (K)', overlay_x=cantera_c, overlay_y=cantera_temp, overlay_label='Cantera 1D')
-    AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['MeanCurvature_progress_variable'], amr_data['temp'], 'Progress Variable c', 'Curvature K (1/m)', 'Temperature T (K)')
+    AMRGrid.pdf_2D(fig, 1, 1, 1, amr_data['temp'], amr_data['MeanCurvature_progress_variable'], 'Temperature T (K)', 'Curvature K (1/m)', dpi=100)
+    # AMRGrid.pdf_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['Y(H)'], 'progress variable', 'Y(H)')
+    # AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['progress_variable'], amr_data['MeanCurvature_progress_variable'], amr_data['temp'], 'Progress Variable c', 'Curvature K (1/m)', 'Temperature T (K)')
+    # AMRGrid.plot_against_2D(fig, 1, 1, 1, amr_data['temp'], amr_data['MeanCurvature_progress_variable'], amr_data['progress_variable'], 'Temperature T (K)', 'Curvature K (1/m)', 'Progress Variable c')
 
-    plt.legend(loc='lower right')
+    # plt.legend(loc='lower right')
     plt.show()
     # amr_data = amr_data.sample(10000)
     #iso_surface = amr_data[(amr_data['progress_variable'] <= 0.81) & (amr_data['progress_variable'] >= 0.79)]
