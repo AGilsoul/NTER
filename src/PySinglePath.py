@@ -272,7 +272,7 @@ def getDelta(point: Point, simplices, points, dt): # simplices_0, points_0, dt):
     if inter_simplex is None:
         return {'Success': 0.0}, 0
 
-    '''
+
     new_X_tri = np.array([[points[i].X[0], points[i].X[1], points[i].X[2]] for i in range(len(points))]).T
 
     fig = plt.figure()
@@ -280,7 +280,7 @@ def getDelta(point: Point, simplices, points, dt): # simplices_0, points_0, dt):
     ax.plot_trisurf(new_X_tri[0], new_X_tri[1], new_X_tri[2], triangles=[simplices[i].v for i in range(len(simplices))], alpha=0.5)
     ax.quiver(x_final[0], x_final[1], x_final[2], point.n[0] * t_min, point.n[1] * t_min, point.n[2] * t_min)
     plt.show()
-    '''
+
 
     return inter_simplex.interp_values(minQ, points), t_min
 
@@ -560,64 +560,66 @@ def singleTemporalPath():
     # all_points, all_simplicies = ParallelIsoSurface.get_all_data(isoT0, t0)
     print(f'Getting initial isosurface points ...')
     all_points, all_simplices = ParallelIsoSurface.get_all_data(isoT0, t0)
-    num_rand = 10
+    num_rand = 1
+    point_index = 6000
     last_points = all_points
     last_simplices = all_simplices
     point_data = []
-    for index in range(num_rand):
-        print(f'Getting path of point {index} ...')
-        point_index = random.randint(0, len(all_points))
-        # point_index = 169000
-        # point_index = 150455
-        point_0 = all_points[point_index]
-        # print(f'X: {point_0.X}')
-        # print(find_nearest_point(test_iso, point_0.X))
-        # last_points = all_points
-        # last_simplices = all_simplicies
+    index = 0
+    # for index in range(num_rand):
+    # print(f'Getting path of point {index} ...')
+    # point_index = random.randint(0, len(all_points))
+    # point_index = 169000
+    # point_index = 150455
+    point_0 = all_points[point_index]
+    # print(f'X: {point_0.X}')
+    # print(find_nearest_point(test_iso, point_0.X))
+    # last_points = all_points
+    # last_simplices = all_simplicies
 
-        for step in range(len(small_range)):
-            isoT1 = get_reg_file(small_range[step])
-            print(f'Getting next isosurface file ...')
-            # isoT1 = get_time_file(small_range[step])
-            # isoT1 = isoT1.sample(frac=0.5)
-            isoT1 = regular_grid(isoT1)
-            t1 = isoT1.iloc[0]['t']
-            print(f'path from {t0} to {t1} ...')
-            dt = t1 - t0
-            print(f'Getting next isosurface points and simplices ...')
-            points_1, simplices_1 = ParallelIsoSurface.get_trimmed_data(copy(isoT1), copy(point_0), copy(t1))
-            print(f'Calculating path between surfaces ...')
-            delta_res = delta_point(point_0, simplices_1, points_1, dt, index)  # last_simplices, last_points, dt, index)
-            if step != 0:
-                print(f'plotting ...')
+    for step in range(len(small_range)):
+        isoT1 = get_reg_file(small_range[step])
+        print(f'Getting next isosurface file ...')
+        # isoT1 = get_time_file(small_range[step])
+        # isoT1 = isoT1.sample(frac=0.5)
+        # isoT1 = regular_grid(isoT1)
+        t1 = isoT1.iloc[0]['t']
+        print(f'path from {t0} to {t1} ...')
+        dt = t1 - t0
+        print(f'Getting next isosurface points and simplices ...')
+        points_1, simplices_1 = ParallelIsoSurface.get_trimmed_data(copy(isoT1), copy(point_0), copy(t1))
+        print(f'Calculating path between surfaces ...')
+        delta_res = delta_point(point_0, simplices_1, points_1, dt, index)  # last_simplices, last_points, dt, index)
+        if step != 0:
+            print(f'plotting ...')
 
-                new_X_tri = np.array([[points_1[i].X[0], points_1[i].X[1], points_1[i].X[2]] for i in range(len(points_1))]).T
-                new_X_tri_0 = np.array(
-                    [[last_points[i].X[0], last_points[i].X[1], last_points[i].X[2]] for i in range(len(last_points))]).T
+            new_X_tri = np.array([[points_1[i].X[0], points_1[i].X[1], points_1[i].X[2]] for i in range(len(points_1))]).T
+            new_X_tri_0 = np.array(
+                [[last_points[i].X[0], last_points[i].X[1], last_points[i].X[2]] for i in range(len(last_points))]).T
 
-                fig = plt.figure()
-                ax = fig.add_subplot(projection='3d')
-                ax.plot_trisurf(new_X_tri[0], new_X_tri[1], new_X_tri[2],
-                                triangles=[simplices_1[i].v for i in range(len(simplices_1))], alpha=0.5)
-                ax.plot_trisurf(new_X_tri_0[0], new_X_tri_0[1], new_X_tri_0[2],
-                                triangles=[last_simplices[i].v for i in range(len(last_simplices))], alpha=0.5)
-                ax.quiver(delta_res['X1'][0], delta_res['X1'][1], delta_res['X1'][2], point_0.n[0] * delta_res['t_min'], point_0.n[1] * delta_res['t_min'], point_0.n[2] * delta_res['t_min'])
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+            ax.plot_trisurf(new_X_tri[0], new_X_tri[1], new_X_tri[2],
+                            triangles=[simplices_1[i].v for i in range(len(simplices_1))], alpha=0.5)
+            ax.plot_trisurf(new_X_tri_0[0], new_X_tri_0[1], new_X_tri_0[2],
+                            triangles=[last_simplices[i].v for i in range(len(last_simplices))], alpha=0.5)
+            ax.quiver(delta_res['X1'][0], delta_res['X1'][1], delta_res['X1'][2], point_0.n[0] * delta_res['t_min'], point_0.n[1] * delta_res['t_min'], point_0.n[2] * delta_res['t_min'])
 
-                plt.show()
+            plt.show()
 
-            if delta_res['Success'] == 0.0:
-                print(f'Unsuccessful for point {index}')
-                break
-            point_data.append(delta_res)
-            point_0 = copy(Point({'X': delta_res['X1'],
-                                  'U': delta_res['U1'],
-                                  'n': delta_res['n1'],
-                                  'K': delta_res['K1'],
-                                  'T': delta_res['T1'],
-                                  't': t1}, norm=True))
-            t0 = t1
-            last_points = points_1
-            last_simplices = simplices_1
+        if delta_res['Success'] == 0.0:
+            print(f'Unsuccessful for point {index}')
+            break
+        point_data.append(delta_res)
+        point_0 = copy(Point({'X': delta_res['X1'],
+                              'U': delta_res['U1'],
+                              'n': delta_res['n1'],
+                              'K': delta_res['K1'],
+                              'T': delta_res['T1'],
+                              't': t1}, norm=True))
+        t0 = t1
+        last_points = points_1
+        last_simplices = simplices_1
 
     out_df = pd.DataFrame.from_dict(point_data)
     out_df = out_df[out_df['Success'] != 0.0]
