@@ -482,7 +482,7 @@ if __name__ == '__main__':
     # formatCSV('res/01930Lev3.csv')
     # CSVtoPKL('01920Lev3')
     # CSVtoPKL('01930Lev3')
-    # df = df[(df['progress_variable'] < 0.825) & (df['progress_variable'] > 0.775)]
+    # df = df[(df['profgress_variable'] < 0.825) & (df['progress_variable'] > 0.775)]
     # pd.to_pickle(df, 'res/iso01920Lev3.pkl')
     # df1 = pd.read_pickle('res/01930Lev3.pkl')
     # df1['r'] = abs(df1['r'])
