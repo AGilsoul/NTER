@@ -1,6 +1,7 @@
 import multiprocessing
 import random
-import scipy.stats
+import statsmodels.api as sm
+from scipy.signal import savgol_filter
 from formatDAT import formatDAT
 from ReadDat import ReadDat
 from ReadCsv import ReadCsv
@@ -45,7 +46,7 @@ class VectorOps:
 
 
 # setup dat file, calculate curvature, radius, etc
-def dat_setup(file_name):
+def dat_setup(file_name, smooth):
     formatDAT(f'{file_name}.dat')
     t, data = ReadDat(f'{file_name}.dat')
     data['t'] = [t for _ in data['X']]
@@ -55,19 +56,23 @@ def dat_setup(file_name):
     curv = []
     radius = []
 
-    data['dx'] = (data['X'] - data['X'].shift(1))
-    data['dy'] = (data['Y'] - data['Y'].shift(1))
-    data['dnx'] = (data['progress_variable_gx'] - data['progress_variable_gx'].shift(1))
-    data['dny'] = (data['progress_variable_gy'] - data['progress_variable_gy'].shift(1))
+    data['dx'] = (data['X'].shift(-1) - data['X'].shift(1))
+    data['dy'] = (data['Y'].shift(-1) - data['Y'].shift(1))
+    data['dnx'] = (data['progress_variable_gx'].shift(-1) - data['progress_variable_gx'].shift(1))
+    data['dny'] = (data['progress_variable_gy'].shift(-1) - data['progress_variable_gy'].shift(1))
     data['curvature'] = ((data['dnx'] / data['dx']) + (data['dny'] / data['dx']))
     data['r'] = (1 / data['curvature'])
-
-    pd.to_pickle(data, f'{file_name}.pkl')
+    if smooth:
+        data['curvature'] = savgol_filter(data['curvature'], 20, 3)
+        data['r'] = savgol_filter(data['r'], 20, 3)
+        pd.to_pickle(data, f'{file_name}_smooth.pkl')
+    else:
+        pd.to_pickle(data, f'{file_name}.pkl')
 
 
 # format all dat files
-def format_all_dat(file_name):
-    dat_setup(file_name)
+def format_all_dat(file_name, smooth):
+    dat_setup(file_name, smooth)
     print('Done!')
 
 
@@ -167,13 +172,16 @@ def get_next_point(p, points, dt):
     return res
 
 
-def process_surfaces(index):
+def process_surfaces(index, smooth=False):
     # process all files
     file_names = []
     print('Formatting all files ...')
     for i in range(0, 1001):
         # print(f'Formatting file {i} ...')
-        file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}Reg'
+        if smooth:
+            file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}Reg_smooth'
+        else:
+            file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}Reg'
         # format_all_dat(file_name)
         file_names.append(file_name)
     print('All files formatted:')
@@ -197,7 +205,7 @@ def process_surfaces(index):
             print('Failed!')
             return
         p0['dr'] = p0['r'] - last_p0['r']
-        # '''
+        '''
         if i % 100 == 1:
             fig = plt.figure()
             ax = fig.add_subplot(1, 1, 1)
@@ -213,22 +221,29 @@ def process_surfaces(index):
             ax.set_ylim(0, 0.032)
             plt.legend()
             plt.show()
-        all_points.append(p0)
         # '''
+        all_points.append(p0)
         last_surface = isoT1
         last_p0 = p0
 
     path_data = pd.DataFrame.from_dict(all_points)
-    path_data.to_pickle(f'res/2d_paths/{index}PathData.pkl')
+    path_data.dropna()
+    if smooth:
+        path_data.to_pickle(f'res/2d_paths/{index}PathData_smooth.pkl')
+    else:
+        path_data.to_pickle(f'res/2d_paths/{index}PathData.pkl')
     plt.show()
 
     return p0
 
 
-def create_regular_grid(file_name, dim=100000):
+def create_regular_grid(file_name, dim=100000, smooth=False):
     cols = ['X', 'Y', 'x_velocity', 'y_velocity', 'density', 'temp', 'HeatRelease', 'Y_H2', 'Y_O2', 'Y_H2O', 'Y_H', 'Y_O', 'Y_OH', 'Y_HO2', 'Y_H2O2', 'Y_N2', 'mixture_fraction', 'progress_variable', 'progress_variable_gx', 'progress_variable_gy', '||gradprogress_variable||', 'curvature', 'r', 't']
 
-    data = pd.read_pickle(f'{file_name}.pkl')
+    if smooth:
+        data = pd.read_pickle(f'{file_name}_smooth.pkl')
+    else:
+        data = pd.read_pickle(f'{file_name}.pkl')
     print(f'original len: {len(data)}')
     data = data.dropna()
     print(f'new len: {len(data)}')
@@ -245,38 +260,52 @@ def create_regular_grid(file_name, dim=100000):
         all_data.append(pt_data)
     new_data = pd.DataFrame(all_data)
     new_data.columns = cols
-    pd.to_pickle(new_data, f'{file_name}Reg.pkl')
+    if smooth:
+        pd.to_pickle(new_data, f'{file_name}Reg_smooth.pkl')
+    else:
+        pd.to_pickle(new_data, f'{file_name}Reg.pkl')
     print(new_data)
 
 
-def regular_process():
+def regular_process(smooth=False):
     for i in range(0, 1001):
         print(f'Making regular grid from file {i} ...')
         file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}'
-        create_regular_grid(file_name)
+        create_regular_grid(file_name, smooth=smooth)
     print(f'Done!')
 
 
-def process_dats():
+def process_dats(smooth=False):
     for i in range(0, 1001):
         print(f'Making pkl from file {i} ...')
         file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}'
-        format_all_dat(file_name)
+        format_all_dat(file_name, smooth)
     print(f'Done!')
 
 
-def graph_data(index):
-    data = pd.read_pickle(f'res/2d_paths/{index}PathData.pkl')
-    data['kdrdt'] = data['curvature'] * data['dr'] / data['dt']
+def graph_data(index, smooth=False):
+    if smooth:
+        data = pd.read_pickle(f'res/2d_paths/{index}PathData_smooth.pkl')
+    else:
+        data = pd.read_pickle(f'res/2d_paths/{index}PathData.pkl')
+    data = data[200:]
+    data['k_hat'] = savgol_filter(data['curvature'], 50, 3)
+    data['dr_hat'] = (1/data['k_hat'] - 1/data['k_hat'].shift(1))
+    # data['dr_hat'] = savgol_filter(data['dr'], 50, 3)
+    data['drdt'] = data['dr_hat'] / data['dt']
+    data['kdrdt'] = data['k_hat'] * data['dr_hat'] / data['dt']
+    # data['kdrdt'] = savgol_filter(data['kdrdt'], 50, 3)
     fig = plt.figure()
     ax1 = plt.subplot(2, 2, 1)
     ax2 = plt.subplot(2, 2, 2)
     ax3 = plt.subplot(2, 2, 3)
     ax4 = plt.subplot(2, 2, 4)
-    ax1.plot(data['t'], data['curvature'])
+    # ax1.scatter(data['t'], data['curvature'], label='Original', s=1)
+    ax1.scatter(data['t'], data['drdt'], label='Smooth', s=1)
+    ax1.legend()
     ax1.set_xlabel('t')
-    ax1.set_ylabel('curvature')
-    ax1.set_title('curvature over time')
+    ax1.set_ylabel('drdt')
+    ax1.set_title('drdt over time')
     ax2.scatter(data['X'], data['Y'], c=plt.cm.hot(data['t'] / max(data['t'])), edgecolor='none')
     ax2.set_xlabel('X')
     ax2.set_ylabel('Y')
@@ -291,26 +320,6 @@ def graph_data(index):
     ax4.set_title('Y position over time')
     plt.tight_layout()
     plt.show()
-
-
-def curv_func(df):
-    df['dS'] = (np.sqrt((df['X'] - df['X'].shift(1))**2 + (df['Y'] - df['Y'].shift(1))**2))
-    df['dTx'] = (df['progress_variable_gx'] - df['progress_variable_gx'].shift(1))
-    df['dTy'] = (df['progress_variable_gy'] - df['progress_variable_gy'].shift(1))
-
-    df['dT/dS'] = (np.sqrt(df['dTx']**2 + df['dTy']**2) / df['dS'])
-
-    df['new_r'] = (1 / df['dT/dS'])
-    return df
-
-
-def new_curvature():
-    for f in range(0, 1001):
-        print(f'curvature on file {f} ...')
-        file_name = f'res/2d_paths/pathIso{str(f).zfill(5)}Reg'
-        data = pd.read_pickle(f'{file_name}.pkl')
-        df = curv_func(data)
-        pd.to_pickle(df, f'{file_name}.pkl')
 
 
 def test_stuff():
@@ -328,10 +337,10 @@ def test_stuff():
 
 def main():
     # new_curvature()
-    # process_dats()
-    # regular_process()
-    # process_surfaces(50000)
-    graph_data(50000)
+    # process_dats(smooth=True)
+    # regular_process(smooth=True)
+    # process_surfaces(50000, smooth=True)
+    graph_data(50000, smooth=True)
     # test_stuff()
     return
 
