@@ -1,25 +1,11 @@
-import multiprocessing
-import random
-import statsmodels.api as sm
 from scipy.signal import savgol_filter
 from formatDAT import formatDAT
 from ReadDat import ReadDat
-from ReadCsv import ReadCsv
 import numpy as np
-from csvToPkl import CSVtoPKL
-from scipy.spatial import Delaunay, ConvexHull, KDTree
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-import matplotlib.tri as mtri
 from ProbDistFunc import pdf_2D, plot_against_2D
-import statistics
-from pathlib import Path
-from formatCSV import formatCSV
 import pandas as pd
-from copy import copy
-from mpl_toolkits.mplot3d import Axes3D
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
+from matplotlib import animation
 
 # formatCSV('res/01920Lev3.csv')
 # formatCSV('res/01930Lev3.csv')
@@ -60,7 +46,7 @@ def dat_setup(file_name, smooth):
     data['dy'] = (data['Y'].shift(-1) - data['Y'].shift(1))
     data['dnx'] = (data['progress_variable_gx'].shift(-1) - data['progress_variable_gx'].shift(1))
     data['dny'] = (data['progress_variable_gy'].shift(-1) - data['progress_variable_gy'].shift(1))
-    data['curvature'] = ((data['dnx'] / data['dx']) + (data['dny'] / data['dx']))
+    data['curvature'] = -((data['dnx'] / data['dx']) + (data['dny'] / data['dx']))
     data['r'] = (1 / data['curvature'])
     if smooth:
         data['curvature'] = savgol_filter(data['curvature'], 20, 3)
@@ -176,7 +162,7 @@ def process_surfaces(index, smooth=False):
     # process all files
     file_names = []
     print('Formatting all files ...')
-    for i in range(0, 1001):
+    for i in range(1000, 2001):
         # print(f'Formatting file {i} ...')
         if smooth:
             file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}Reg_smooth'
@@ -189,11 +175,10 @@ def process_surfaces(index, smooth=False):
     p0 = isoT0.iloc[index]
 
     all_points = []
-    last_surface = isoT0
     last_p0 = p0
-    for i in range(1, 1000, 1):
+    for i in range(1001, 2001):
         print(i)
-        isoT1 = pd.read_pickle(f'{file_names[i]}.pkl')
+        isoT1 = pd.read_pickle(f'{file_names[i-1000]}.pkl')
         # print(isoT1)
         isoT1['dist'] = isoT1.apply(lambda row: VectorOps.point_dist(row, p0), axis=1)
         isoT1 = isoT1[isoT1['dist'] < threshold]
@@ -205,25 +190,7 @@ def process_surfaces(index, smooth=False):
             print('Failed!')
             return
         p0['dr'] = p0['r'] - last_p0['r']
-        '''
-        if i % 100 == 1:
-            fig = plt.figure()
-            ax = fig.add_subplot(1, 1, 1)
-            # plot_against_2D(fig, ax, last_surface['X'], last_surface['Y'], last_surface['curvature'], 'x', 'y', 'curvature')
-            # plot_against_2D(fig, ax, isoT1['X'], isoT1['Y'], isoT1['curvature'], 'x', 'y', 'curvature')
-            plt.plot(last_surface['X'], last_surface['Y'])
-            plt.plot(isoT1['X'], isoT1['Y'])
-            plt.quiver(p0['X'] + p0['x_velocity'] * dt, p0['Y'] + p0['y_velocity'] * dt, p0['progress_variable_gx'] * p0['q'], p0['progress_variable_gy'] * p0['q'])
-            print(f'last p: {last_p0}')
-            print(f'new p: {p0}')
-            plt.scatter(last_p0['X'], last_p0['Y'], label='p0')
-            plt.scatter(p0['X'], p0['Y'], label='p1')
-            ax.set_ylim(0, 0.032)
-            plt.legend()
-            plt.show()
-        # '''
         all_points.append(p0)
-        last_surface = isoT1
         last_p0 = p0
 
     path_data = pd.DataFrame.from_dict(all_points)
@@ -268,7 +235,7 @@ def create_regular_grid(file_name, dim=100000, smooth=False):
 
 
 def regular_process(smooth=False):
-    for i in range(0, 1001):
+    for i in range(1000, 2001):
         print(f'Making regular grid from file {i} ...')
         file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}'
         create_regular_grid(file_name, smooth=smooth)
@@ -276,36 +243,90 @@ def regular_process(smooth=False):
 
 
 def process_dats(smooth=False):
-    for i in range(0, 1001):
+    for i in range(1000, 2001):
         print(f'Making pkl from file {i} ...')
         file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}'
         format_all_dat(file_name, smooth)
     print(f'Done!')
 
 
-def graph_data(index, smooth=False):
+def update_fig(t, data, ax_an1, ax_an2):
+    step = int(t) % 800
+    print(t)
+    # print(data)
+    cur_point = data.iloc[step]
+    global surfaces
+    cur_surface = surfaces[step]
+    ax_an1.cla()
+    ax_an1.set_xlim(0, 0.032)
+    ax_an1.set_ylim(0, 0.032)
+    ax_an1.set_xlabel('X')
+    ax_an1.set_ylabel('Y')
+    n = np.array([cur_point['progress_variable_gx'] * cur_point['q'], cur_point['progress_variable_gy'] * cur_point['q']])
+    u = np.array([cur_point['x_velocity'] * cur_point['dt'], cur_point['y_velocity'] * cur_point['dt']])
+    dif = u + n
+    ax_an1.plot(cur_surface['X'], cur_surface['Y'])
+    ax_an1.scatter(cur_point['X'], cur_point['Y'])
+    ax_an1.quiver(cur_point['X'], cur_point['Y'], n[0], n[1], angles='xy', scale_units='xy', scale=1)
+    ax_an1.quiver(cur_point['X'], cur_point['Y'], u[0], u[1], angles='xy', scale_units='xy', scale=1)
+    ax_an1.quiver(cur_point['X'], cur_point['Y'], dif[0], dif[1], angles='xy', scale_units='xy', scale=1)
+    ax_an2.cla()
+    ax_an2.plot(data['t'], data['k_hat'])
+    ax_an2.set_xlabel('t')
+    ax_an2.set_ylabel('curvature')
+    ax_an2.scatter(cur_point['t'], cur_point['curvature'])
+    return ax_an1, ax_an2
+
+
+surfaces = []
+
+
+def graph_data(index, smooth=False, animating=False):
+    print(f'reading data...')
+    global surfaces
     if smooth:
         data = pd.read_pickle(f'res/2d_paths/{index}PathData_smooth.pkl')
+        if animating:
+            for i in range(1000, 2001):
+                surfaces.append(pd.read_pickle(f'res/2d_paths/pathIso0{i}Reg_smooth.pkl'))
     else:
         data = pd.read_pickle(f'res/2d_paths/{index}PathData.pkl')
     data = data[200:]
+
     data['k_hat'] = savgol_filter(data['curvature'], 50, 3)
     data['dr_hat'] = (1/data['k_hat'] - 1/data['k_hat'].shift(1))
     # data['dr_hat'] = savgol_filter(data['dr'], 50, 3)
     data['drdt'] = data['dr_hat'] / data['dt']
     data['kdrdt'] = data['k_hat'] * data['dr_hat'] / data['dt']
     # data['kdrdt'] = savgol_filter(data['kdrdt'], 50, 3)
-    fig = plt.figure()
+    data = data.dropna()
+
+    if animating:
+        surfaces = surfaces[200:]
+        print(f'animating ...')
+        fig = plt.figure()
+        ax_an1 = fig.add_subplot(1, 2, 1)
+        ax_an2 = fig.add_subplot(1, 2, 2)
+        anim = animation.FuncAnimation(fig, update_fig, fargs=(data, ax_an1, ax_an2),
+                                       interval=1, frames=800, blit=False)
+        fig.tight_layout()
+        plt.show()
+        print(f'saving ...')
+        # writervideo = animation.FFMpegWriter(fps=60)
+        # anim.save('test_anim.mp4', writer=writervideo)
+        plt.close()
+        print(f'saved!')
+
     ax1 = plt.subplot(2, 2, 1)
     ax2 = plt.subplot(2, 2, 2)
     ax3 = plt.subplot(2, 2, 3)
     ax4 = plt.subplot(2, 2, 4)
     # ax1.scatter(data['t'], data['curvature'], label='Original', s=1)
-    ax1.scatter(data['t'], data['drdt'], label='Smooth', s=1)
+    ax1.plot(data['t'], data['kdrdt'], label='Smooth')
     ax1.legend()
     ax1.set_xlabel('t')
-    ax1.set_ylabel('drdt')
-    ax1.set_title('drdt over time')
+    ax1.set_ylabel('kdrdt')
+    ax1.set_title('kdrdt over time')
     ax2.scatter(data['X'], data['Y'], c=plt.cm.hot(data['t'] / max(data['t'])), edgecolor='none')
     ax2.set_xlabel('X')
     ax2.set_ylabel('Y')
@@ -337,10 +358,10 @@ def test_stuff():
 
 def main():
     # new_curvature()
-    # process_dats(smooth=True)
+    # process_dats(smooth=True)0
     # regular_process(smooth=True)
     # process_surfaces(50000, smooth=True)
-    graph_data(50000, smooth=True)
+    graph_data(50000, smooth=True, animating=True)
     # test_stuff()
     return
 
