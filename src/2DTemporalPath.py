@@ -1,3 +1,5 @@
+import random
+
 from scipy.signal import savgol_filter
 from formatDAT import formatDAT
 from ReadDat import ReadDat
@@ -11,6 +13,7 @@ from matplotlib import animation
 # formatCSV('res/01930Lev3.csv')
 # CSVtoPKL('01920Lev3')
 # CSVtoPKL('01930Lev3')
+
 
 # basic vector operations
 class VectorOps:
@@ -99,8 +102,39 @@ def interpolate_point(X, p1, p2, q, dt):
             }
 
 
+def point_from_row(row, q, dt):
+
+    u = row['x_velocity']
+    v = row['y_velocity']
+    gx = row['progress_variable_gx']
+    gy = row['progress_variable_gy']
+    k = row['curvature']
+    r = 1 / k
+    temp = row['temp']
+    mix_frac = row['mixture_fraction']
+
+    return {'X': row['X'],
+            'Y': row['Y'],
+            'x_velocity': u,
+            'y_velocity': v,
+            'progress_variable_gx': gx,
+            'progress_variable_gy': gy,
+            'curvature': k,
+            'r': r,
+            'temp': temp,
+            't': row['t'],
+            'dt': dt,
+            'mixture_fraction': mix_frac,
+            'q': q,
+            'success': True
+            }
+
+
 # find the intersection of the direction vector found from point p and the line formed by points p1 and p2
 def find_intersection(X, n, b0, p1, p2):
+
+    # [x1, y1] = [nx, ny]*t + [bx, by]
+
     m = n[1] / n[0]
 
     # get slope of current line
@@ -108,27 +142,37 @@ def find_intersection(X, n, b0, p1, p2):
     b1 = p1['Y'] - slope * p1['X']
 
     # make sure lines aren't parallel
-    if m == slope:
+    if m == slope or np.isnan(slope) or np.isnan(m):
         return [-1, -1], -1, False
 
     # get x and y values of intersection
-    x_intersection = (b1 - b0) / (m - slope)
+
+    # line is vertical
+    if np.isinf(slope):
+        x_intersection = p1['X']
+    else:
+        x_intersection = (b1 - b0) / (m - slope)
     y_intersection = m * x_intersection + b0
 
-    if not (p1['X'] <= x_intersection <= p2['X']) or np.isnan(x_intersection):
+    if not (p1['X'] <= x_intersection <= p2['X'] or p2['X'] <= x_intersection <= p1['X']) or np.isnan(x_intersection):
+        if np.isnan(x_intersection):
+            print(f'NaN!')
+            print(f'{m} - {slope}')
+            print(f'p1: ({p1["X"]}, {p1["Y"]}), p2: ({p2["X"]}, {p2["Y"]})')
+
         return [-1, -1], -1, False
-    print(f'valid intersection found!\n'
-          f'at ({x_intersection}, {y_intersection})')
+    # print(f'valid intersection found!\n'
+           # f'at ({x_intersection}, {y_intersection})')
     # get q value of vector
     q = (x_intersection - X[0]) / n[0]
     return np.array([x_intersection, y_intersection]), q, True
 
 
-threshold = 0.0001
+threshold = 0.01
 
 
 # get point on next curve
-def get_next_point(p, points, dt):
+def get_next_point(p, points, dt, last_q, first, plot=False):
     inter_index = -1
     min_q = 0
     inter_coords = []
@@ -138,6 +182,11 @@ def get_next_point(p, points, dt):
     n = np.array([p['progress_variable_gx'], p['progress_variable_gy']])
     # get y intercept of point line
     b0 = X[1] - (n[1]/n[0]) * X[0]
+    if plot:
+        plt.scatter(points['X'], points['Y'])
+        plt.scatter(X[0], X[1])
+        plt.quiver(X[0], X[1], -n[0], -n[1], angles='xy', scale_units='xy', scale=1)
+        plt.show()
     # for every point
     for i in range(len(points) - 1):
         cur_p1 = points.iloc[i]
@@ -145,63 +194,92 @@ def get_next_point(p, points, dt):
         inter, q, success = find_intersection(X, n, b0, cur_p1, cur_p2)
         if not success:
             continue
-        if inter_index == -1 or min_q > q:
+        if inter_index == -1 or np.abs(min_q) >= np.abs(q):
             inter_index = i
             min_q = q
             inter_coords = inter
 
-    if inter_index != -1:
-        res = interpolate_point(inter_coords, points.iloc[inter_index], points.iloc[inter_index + 1], min_q, dt)
-        print(f'inter coords: {inter_coords}, curvature: {res["curvature"]}')
+    # if overshoot, find closest point in direction of norm, with last magnitude
+    if (first and min_q > 0.001) or inter_index == -1 or (not first and abs((last_q - min_q) / last_q) > 0.1):
+        new_origin = X
+        if not first:
+            new_origin += n * last_q
+        new_origin = {'X': new_origin[0], 'Y': new_origin[1]}
+        dists = [VectorOps.point_dist(new_origin, points.iloc[p1]) for p1 in range(len(points))]
+        res = point_from_row(points.iloc[dists.index(min(dists))], last_q, dt)
+        res['dy'] = res['X'] - p['X']
+        print('alt method')
     else:
-        res = {'success': False}
+        res = interpolate_point(inter_coords, points.iloc[inter_index], points.iloc[inter_index + 1], min_q, dt)
+        res['dy'] = res['X'] - p['X']
+        # print(f'inter coords: {inter_coords}, curvature: {res["curvature"]}')
     return res
 
 
-def process_surfaces(index, smooth=False):
+def process_surfaces(num_points=100, reg=False, smooth=False):
     # process all files
     file_names = []
     print('Formatting all files ...')
     for i in range(1000, 2001):
         # print(f'Formatting file {i} ...')
+        file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}'
+        if reg:
+            file_name += 'Reg'
         if smooth:
-            file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}Reg_smooth'
-        else:
-            file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}Reg'
+            file_name += '_smooth'
         # format_all_dat(file_name)
         file_names.append(file_name)
     print('All files formatted:')
     isoT0 = pd.read_pickle(f'{file_names[0]}.pkl')
-    p0 = isoT0.iloc[index]
+    isoT0 = isoT0.dropna()
+    isoT0 = isoT0.reset_index()
+    print(isoT0)
+    # indices = [random.randint(40000, 60000) for _ in range(num_points)]
+    indices = [random.randint(500, 1200) for _ in range(num_points)]
+    # indices = [58931]
+    p0 = [isoT0.iloc[indices[i]] for i in range(num_points)]
 
-    all_points = []
+    all_points = [[] for _ in range(num_points)]
+    skip_indices = []
     last_p0 = p0
+    last_q = [0 for _ in range(num_points)]
     for i in range(1001, 2001):
         print(i)
         isoT1 = pd.read_pickle(f'{file_names[i-1000]}.pkl')
         # print(isoT1)
-        isoT1['dist'] = isoT1.apply(lambda row: VectorOps.point_dist(row, p0), axis=1)
-        isoT1 = isoT1[isoT1['dist'] < threshold]
-        t0 = p0['t']
-        t1 = isoT1.iloc[0]['t']
-        dt = t1 - t0
-        p0 = get_next_point(p0, isoT1, dt)
-        if not p0['success']:
-            print('Failed!')
-            return
-        p0['dr'] = p0['r'] - last_p0['r']
-        all_points.append(p0)
-        last_p0 = p0
+        print(skip_indices)
+        print([indices[i] for i in skip_indices])
+        # print(isoT1)
+        for p in range(len(p0)):
+            if p in skip_indices:
+                continue
+            cur_p0 = p0[p]
+            isoT1_copy = isoT1.copy()
+            isoT1_copy = isoT1_copy.dropna()
+            isoT1_copy = isoT1_copy.reset_index()
+            isoT1_copy['dist'] = isoT1_copy.apply(lambda row: VectorOps.point_dist(row, cur_p0), axis=1)
+            isoT1_copy = isoT1_copy[isoT1_copy['dist'] < threshold]
+            print(isoT1_copy)
+            t0 = cur_p0['t']
+            t1 = isoT1_copy.iloc[0]['t']
+            dt = t1 - t0
+            cur_p0 = get_next_point(cur_p0, isoT1_copy, dt, last_q[p], i == 1001)
+            if not cur_p0['success']:
+                print('Failed!')
+                skip_indices.append(p)
+                break
+            cur_p0['dr'] = cur_p0['r'] - last_p0[p]['r']
+            all_points[p].append(cur_p0)
+            last_p0[p] = p0[p]
+            last_q[p] = cur_p0['q']
 
-    path_data = pd.DataFrame.from_dict(all_points)
-    path_data.dropna()
-    if smooth:
-        path_data.to_pickle(f'res/2d_paths/{index}PathData_smooth.pkl')
-    else:
-        path_data.to_pickle(f'res/2d_paths/{index}PathData.pkl')
-    plt.show()
-
-    return p0
+    for p in range(len(all_points)):
+        path_data = pd.DataFrame.from_dict(all_points[p])
+        path_data.dropna()
+        if smooth:
+            path_data.to_pickle(f'res/2d_paths/{p}PathData_smooth.pkl')
+        else:
+            path_data.to_pickle(f'res/2d_paths/{p}PathData.pkl')
 
 
 def create_regular_grid(file_name, dim=100000, smooth=False):
@@ -250,73 +328,90 @@ def process_dats(smooth=False):
     print(f'Done!')
 
 
-def update_fig(t, data, ax_an1, ax_an2):
-    step = int(t) % 800
+# p_list = [1, 2, 4, 5]
+p_list = []
+
+
+def update_fig(t, point_paths, ax_an1, ax_an2, num_points):
+    step = int(t) % 1000
     print(t)
     # print(data)
-    cur_point = data.iloc[step]
     global surfaces
     cur_surface = surfaces[step]
     ax_an1.cla()
+    ax_an2.cla()
+    # mag_vel = np.sqrt((cur_point['x_velocity'] * cur_point['dt'])**2 + (cur_point['y_velocity'] * cur_point['dt'])**2)
     ax_an1.set_xlim(0, 0.032)
     ax_an1.set_ylim(0, 0.032)
+    scale = 1000
+    
+    # d = mag_vel * 100
+    # ax_an1.set_xlim(cur_point['X'] - d, cur_point['X'] + d)
+    # ax_an1.set_ylim(cur_point['Y'] - d, cur_point['Y'] + d)
     ax_an1.set_xlabel('X')
     ax_an1.set_ylabel('Y')
-    n = np.array([cur_point['progress_variable_gx'] * cur_point['q'], cur_point['progress_variable_gy'] * cur_point['q']])
-    u = np.array([cur_point['x_velocity'] * cur_point['dt'], cur_point['y_velocity'] * cur_point['dt']])
-    dif = u + n
+    # n = np.array([cur_point['progress_variable_gx'] * cur_point['q'], cur_point['progress_variable_gy'] * cur_point['q']])
+    # u = np.array([cur_point['x_velocity'] * cur_point['dt'], cur_point['y_velocity'] * cur_point['dt']])
     ax_an1.plot(cur_surface['X'], cur_surface['Y'])
-    ax_an1.scatter(cur_point['X'], cur_point['Y'])
-    ax_an1.quiver(cur_point['X'], cur_point['Y'], n[0], n[1], angles='xy', scale_units='xy', scale=1)
-    ax_an1.quiver(cur_point['X'], cur_point['Y'], u[0], u[1], angles='xy', scale_units='xy', scale=1)
-    ax_an1.quiver(cur_point['X'], cur_point['Y'], dif[0], dif[1], angles='xy', scale_units='xy', scale=1)
-    ax_an2.cla()
-    ax_an2.plot(data['t'], data['k_hat'])
     ax_an2.set_xlabel('t')
-    ax_an2.set_ylabel('curvature')
-    ax_an2.scatter(cur_point['t'], cur_point['curvature'])
+    ax_an2.set_ylabel('magnitude')
+    for p in range(num_points):
+        if p not in p_list:
+            if step <= len(point_paths[p]):
+                cur_point = point_paths[p].iloc[step]
+                # print(cur_point)
+                ax_an1.scatter(cur_point['X'], cur_point['Y'])
+                ax_an2.plot(point_paths[p]['t'], point_paths[p]['q'])
+                ax_an2.scatter(cur_point['t'], cur_point['q'])
+        # ax_an1.quiver(cur_point['X'], cur_point['Y'], n[0], n[1], angles='xy', scale_units='xy', scale=1)
+    # ax_an1.quiver(cur_point['X'], cur_point['Y'], u[0] * scale, u[1] * scale, angles='xy', scale_units='xy', scale=1)
+    # ax_an1.quiver(cur_point['X'] + u[0], cur_point['Y'] + u[1], n[0] * scale, n[1] * scale, angles='xy', scale_units='xy', scale=1)
+
     return ax_an1, ax_an2
 
 
 surfaces = []
 
 
-def graph_data(index, smooth=False, animating=False):
-    print(f'reading data...')
+def graph_data(num_points=10, reg=False, smooth=False, animating=False):
+    print(f'reading surfaces...')
     global surfaces
-    if smooth:
-        data = pd.read_pickle(f'res/2d_paths/{index}PathData_smooth.pkl')
-        if animating:
-            for i in range(1000, 2001):
-                surfaces.append(pd.read_pickle(f'res/2d_paths/pathIso0{i}Reg_smooth.pkl'))
-    else:
-        data = pd.read_pickle(f'res/2d_paths/{index}PathData.pkl')
-    data = data[200:]
-
-    data['k_hat'] = savgol_filter(data['curvature'], 50, 3)
-    data['dr_hat'] = (1/data['k_hat'] - 1/data['k_hat'].shift(1))
-    # data['dr_hat'] = savgol_filter(data['dr'], 50, 3)
-    data['drdt'] = data['dr_hat'] / data['dt']
-    data['kdrdt'] = data['k_hat'] * data['dr_hat'] / data['dt']
-    # data['kdrdt'] = savgol_filter(data['kdrdt'], 50, 3)
-    data = data.dropna()
-
     if animating:
-        surfaces = surfaces[200:]
+        for i in range(1000, 2001):
+            surfaces.append(pd.read_pickle(f'res/2d_paths/pathIso0{i}Reg_smooth.pkl'))
+    point_paths = []
+    print(f'reading point data...')
+    for p in range(num_points):
+        if smooth:
+            data = pd.read_pickle(f'res/2d_paths/{p}PathData_smooth.pkl')
+        else:
+            data = pd.read_pickle(f'res/2d_paths/{p}PathData.pkl')
+        print(data)
+
+        data['k_hat'] = savgol_filter(data['curvature'], 50, 3)
+        data['dr_hat'] = (1/data['k_hat'] - 1/data['k_hat'].shift(1))
+        # data['dr_hat'] = savgol_filter(data['dr'], 50, 3)
+        data['drdt'] = data['dr_hat'] / data['dt']
+        data['kdrdt'] = data['k_hat'] * data['dr_hat'] / data['dt']
+        # data['kdrdt'] = savgol_filter(data['kdrdt'], 50, 3)
+        data = data.dropna()
+        point_paths.append(data)
+    print(point_paths[0])
+    print('Done reading data')
+    if animating:
         print(f'animating ...')
         fig = plt.figure()
         ax_an1 = fig.add_subplot(1, 2, 1)
         ax_an2 = fig.add_subplot(1, 2, 2)
-        anim = animation.FuncAnimation(fig, update_fig, fargs=(data, ax_an1, ax_an2),
-                                       interval=1, frames=800, blit=False)
+        anim = animation.FuncAnimation(fig, update_fig, fargs=(point_paths, ax_an1, ax_an2, num_points),
+                                       interval=1, frames=998, repeat=False, blit=False)
         fig.tight_layout()
         plt.show()
-        print(f'saving ...')
         # writervideo = animation.FFMpegWriter(fps=60)
         # anim.save('test_anim.mp4', writer=writervideo)
+        anim.save('test.gif', writer='imagemagick', fps=60)
         plt.close()
-        print(f'saved!')
-
+    '''
     ax1 = plt.subplot(2, 2, 1)
     ax2 = plt.subplot(2, 2, 2)
     ax3 = plt.subplot(2, 2, 3)
@@ -341,6 +436,7 @@ def graph_data(index, smooth=False, animating=False):
     ax4.set_title('Y position over time')
     plt.tight_layout()
     plt.show()
+    '''
 
 
 def test_stuff():
@@ -358,10 +454,11 @@ def test_stuff():
 
 def main():
     # new_curvature()
-    # process_dats(smooth=True)0
+    # process_dats(smooth=False)
     # regular_process(smooth=True)
-    # process_surfaces(50000, smooth=True)
-    graph_data(50000, smooth=True, animating=True)
+    num_points = 50
+    # process_surfaces(num_points=num_points, reg=False, smooth=True)
+    graph_data(num_points=num_points, reg=False, smooth=True, animating=True)
     # test_stuff()
     return
 
