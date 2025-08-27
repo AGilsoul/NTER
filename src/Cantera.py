@@ -31,7 +31,7 @@ def compute1DFlame():
     flame.solve(loglevel=0, auto=True)
     Y_H2 = flame.Y[0]
     Y_O2 = flame.Y[1]
-
+    print(flame.velocity[0])
     return list(flame.T), list(computeProgVar(Y_H2)), list(computeMixFrac(Y_H2, Y_O2)), list(grid)
 
 

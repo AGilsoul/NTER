@@ -69,25 +69,30 @@ def format_all_dat(file_name, smooth):
     print('Done!')
 
 
-def interp_helper(p1, p2, dx1, dx2, denom, quantity):
-    return (p1[quantity] * dx1 + p2[quantity] * dx2) / denom
+def interp_helper(p1, p2, dx1, dx2, d12, quantity):
+    return (p1[quantity] * dx1 + p2[quantity] * dx2) / d12
 
 
 def interpolate_point(X, p1, p2, q, dt):
-    d_x_p1 = X - np.array([p1['X'], p1['Y']])
-    d_x_p1 = np.dot(d_x_p1, d_x_p1)
-    d_x_p2 = X - np.array([p2['X'], p2['Y']])
-    d_x_p2 = np.dot(d_x_p2, d_x_p2)
-    denom = np.sqrt(d_x_p1 + d_x_p2)
+    p1_arr = np.array([p1['X'], p1['Y']])
+    p2_arr = np.array([p2['X'], p2['Y']])
+    d_x_p1 = X - p1_arr
+    d_x_p1 = np.sqrt(np.dot(d_x_p1, d_x_p1))
+    d_x_p2 = X - p2_arr
+    d_x_p2 = np.sqrt(np.dot(d_x_p2, d_x_p2))
+    d_p1_p2 = p1_arr - p2_arr
+    d_p1_p2 = np.sqrt(np.dot(d_p1_p2, d_p1_p2))
 
-    u = interp_helper(p1, p2, d_x_p1, d_x_p2, denom, 'x_velocity')
-    v = interp_helper(p1, p2, d_x_p1, d_x_p2, denom, 'y_velocity')
-    gx = interp_helper(p1, p2, d_x_p1, d_x_p2, denom, 'progress_variable_gx')
-    gy = interp_helper(p1, p2, d_x_p1, d_x_p2, denom, 'progress_variable_gy')
-    k = interp_helper(p1, p2, d_x_p1, d_x_p2, denom, 'curvature')
+    u = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'x_velocity')
+    v = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'y_velocity')
+    gx = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'progress_variable_gx')
+    gy = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'progress_variable_gy')
+    k = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'curvature')
     r = 1/k
-    temp = interp_helper(p1, p2, d_x_p1, d_x_p2, denom, 'temp')
-    mix_frac = interp_helper(p1, p2, d_x_p1, d_x_p2, denom, 'mixture_fraction')
+    temp = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'temp')
+    mix_frac = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'mixture_fraction')
+    Y_OH = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'Y_OH')
+    Y_H = interp_helper(p1, p2, d_x_p1, d_x_p2, d_p1_p2, 'Y_H')
     return {'X': X[0],
             'Y': X[1],
             'x_velocity': u,
@@ -100,13 +105,14 @@ def interpolate_point(X, p1, p2, q, dt):
             't': p1['t'],
             'dt': dt,
             'mixture_fraction': mix_frac,
+            'Y_OH': Y_OH,
+            'Y_H': Y_H,
             'q': q,
             'success': True
             }
 
 
 def point_from_row(row, q, dt):
-
     u = row['x_velocity']
     v = row['y_velocity']
     gx = row['progress_variable_gx']
@@ -115,6 +121,8 @@ def point_from_row(row, q, dt):
     r = 1 / k
     temp = row['temp']
     mix_frac = row['mixture_fraction']
+    Y_OH = row['Y_OH']
+    Y_H = row['Y_H']
 
     return {'X': row['X'],
             'Y': row['Y'],
@@ -128,6 +136,8 @@ def point_from_row(row, q, dt):
             't': row['t'],
             'dt': dt,
             'mixture_fraction': mix_frac,
+            'Y_OH': Y_OH,
+            'Y_H': Y_H,
             'q': q,
             'success': True
             }
@@ -168,14 +178,7 @@ def find_intersection(X, n, p1, p2):
         y_intersection = m * x_intersection + b0
 
     if not ((p1['X'] <= x_intersection <= p2['X'] or p2['X'] <= x_intersection <= p1['X']) and (p1['Y'] <= y_intersection <= p2['Y'] or p2['Y'] <= y_intersection <= p1['Y'])) or np.isnan(x_intersection):
-        if np.isnan(x_intersection):
-            print(f'NaN!')
-            print(f'{m} - {slope}')
-            print(f'p1: ({p1["X"]}, {p1["Y"]}), p2: ({p2["X"]}, {p2["Y"]})')
-
         return [-1, -1], -1, False
-    # print(f'valid intersection found!\n'
-           # f'at ({x_intersection}, {y_intersection})')
     # get q value of vector
     q = (x_intersection - X[0]) / n[0]
     return np.array([x_intersection, y_intersection]), q, True
@@ -193,6 +196,7 @@ def get_next_point(p, points, dt, last_q, first, index, plot=False, last_points=
     X = np.array([p['X'] + p['x_velocity'] * dt, p['Y'] + p['y_velocity'] * dt])
     # get normal vector for direction
     n = np.array([p['progress_variable_gx'], p['progress_variable_gy']])
+    n /= np.sqrt(np.dot(n, n))
     # for every point
     for i in range(len(points) - 1):
         cur_p1 = points.iloc[i]
@@ -211,32 +215,32 @@ def get_next_point(p, points, dt, last_q, first, index, plot=False, last_points=
         plt.scatter(X[0], X[1])
         plt.quiver(X[0], X[1], n[0] * min_q, n[1] * min_q, angles='xy', scale_units='xy', scale=1)
         plt.show()
-    # if overshoot, find closest point in direction of norm, with last magnitude
-    '''if inter_index == -1 or (abs((last_q - min_q) / last_q) > 1 and not first and last_q != 0 and abs(min_q) > abs(last_q)):
-        new_origin = X.copy()
-        if not first:
-            new_origin += n * last_q
-        new_origin = {'X': new_origin[0], 'Y': new_origin[1]}
-        dists = [VectorOps.point_dist(new_origin, points.iloc[p1]) for p1 in range(len(points))]
-        res = point_from_row(points.iloc[dists.index(min(dists))], min(dists), dt)
-        res['dy'] = res['X'] - p['X']
-        print(f'alt method on point {index}')
-    else:
-    '''
+
+    if inter_index == -1:
+        return {'success': False}
+
     res = interpolate_point(inter_coords, points.iloc[inter_index], points.iloc[inter_index + 1], min_q, dt)
     res['dy'] = res['X'] - p['X']
     '''
-    # if min_q >
-    print(f'previous q: {last_q}')
     print(f'minimum q: {min_q}')
+    print(f'q flame speed: {min_q / dt}')
+    fluid_diff = X - np.array([p['X'], p['Y']])
+    fluid_disp = np.sqrt(np.dot(fluid_diff, fluid_diff))
+    flame_diff = np.array([res['X'], res['Y']]) - X
+    flame_disp = np.sqrt(np.dot(flame_diff, flame_diff))
+    print(f'fluid displacement: {fluid_disp}')
+    print(f'flame displacement: {flame_disp}')
+    print(f'dt: {dt}')
+    print(f'calculated flame speed: {flame_disp / dt}')
     plt.plot(points['X'], points['Y'], label='surface t+1')
     if len(last_points) != 0:
         plt.plot(last_points['X'], last_points['Y'], label='surface t')
+    plt.xlim(0, 0.032)
+    plt.ylim(0, 0.032)
     plt.scatter(X[0], X[1], label='fluid push')
     plt.scatter(p['X'], p['Y'], label='original')
     plt.quiver(p['X'], p['Y'], p['x_velocity'] * dt, p['y_velocity'] * dt, angles='xy', scale_units='xy', scale=1)
     plt.quiver(X[0], X[1], n[0] * min_q, n[1] * min_q, angles='xy', scale_units='xy', scale=1)
-    # plt.quiver(X[0], X[1], n[0] * last_q, n[1] * last_q, angles='xy', scale_units='xy', scale=1)
     plt.scatter(res['X'], res['Y'], label='end point')
     plt.legend()
     plt.show()
@@ -244,27 +248,24 @@ def get_next_point(p, points, dt, last_q, first, index, plot=False, last_points=
     return res
 
 
-def process_surfaces(num_points=100, reg=False, smooth=False):
+def process_surfaces(reg=False, smooth=False):
     # process all files
     file_names = []
     print('Formatting all files ...')
     for i in range(i_min, i_max):
-        # print(f'Formatting file {i} ...')
         file_name = f'res/2d_paths/pathIso{str(i).zfill(5)}'
         if reg:
             file_name += 'Reg'
         if smooth:
             file_name += '_smooth'
-        # format_all_dat(file_name)
         file_names.append(file_name)
     print('All files formatted:')
     isoT0 = pd.read_pickle(f'{file_names[0]}.pkl')
     isoT0 = isoT0.dropna()
     isoT0 = isoT0.reset_index()
-    print(isoT0)
-    # indices = [random.randint(40000, 60000) for _ in range(num_points)]
-    indices = [random.randint(500, 1200) for _ in range(num_points)]
-    # indices = [58931]
+    indices = np.arange(100, len(isoT0) - 100, 5)
+    num_points = len(indices)
+    print(f'Evaluating at {num_points} points ...')
     p0 = [isoT0.iloc[indices[i]] for i in range(num_points)]
 
     all_points = [[] for _ in range(num_points)]
@@ -274,10 +275,8 @@ def process_surfaces(num_points=100, reg=False, smooth=False):
     for i in range(i_min+1, i_max):
         print(i)
         isoT1 = pd.read_pickle(f'{file_names[i-i_min]}.pkl')
-        # print(isoT1)
         print(skip_indices)
         print([indices[i] for i in skip_indices])
-        # print(isoT1)
         for p in range(len(p0)):
             if p in skip_indices:
                 continue
@@ -287,7 +286,6 @@ def process_surfaces(num_points=100, reg=False, smooth=False):
             isoT1_copy = isoT1_copy.reset_index()
             isoT1_copy['dist'] = isoT1_copy.apply(lambda row: VectorOps.point_dist(row, cur_p0), axis=1)
             isoT1_copy = isoT1_copy[isoT1_copy['dist'] < threshold]
-            # print(isoT1_copy)
             dt = 5e-6
             cur_p0 = get_next_point(cur_p0, isoT1_copy, dt, last_q[p], i == 1001, p, last_points=isoT0)
             if not cur_p0['success']:
@@ -302,12 +300,16 @@ def process_surfaces(num_points=100, reg=False, smooth=False):
         isoT0 = isoT1
 
     for p in range(len(all_points)):
+        if p in skip_indices:
+            continue
         path_data = pd.DataFrame.from_dict(all_points[p])
         path_data.dropna()
         if smooth:
             path_data.to_pickle(f'res/2d_paths/{p}PathData_smooth.pkl')
         else:
             path_data.to_pickle(f'res/2d_paths/{p}PathData.pkl')
+
+    return num_points
 
 
 def create_regular_grid(file_name, dim=100000, smooth=False):
@@ -360,7 +362,7 @@ def process_dats(smooth=False):
 p_list = []
 
 
-def update_fig(t, point_paths, ax_an1, ax_an2, num_points):
+def update_fig(t, point_paths, ax_an1, ax_an2, x_axis, y_axis, num_points):
     step = int(t) % 1000
     print(t)
     # print(data)
@@ -381,16 +383,16 @@ def update_fig(t, point_paths, ax_an1, ax_an2, num_points):
     # n = np.array([cur_point['progress_variable_gx'] * cur_point['q'], cur_point['progress_variable_gy'] * cur_point['q']])
     # u = np.array([cur_point['x_velocity'] * cur_point['dt'], cur_point['y_velocity'] * cur_point['dt']])
     ax_an1.plot(cur_surface['X'], cur_surface['Y'])
-    ax_an2.set_xlabel('k dr/dt')
-    ax_an2.set_ylabel('temp')
+    ax_an2.set_xlabel(x_axis)
+    ax_an2.set_ylabel(y_axis)
     for p in range(num_points):
-        if p not in p_list and p == 0:
+        if p not in p_list:
             if step <= len(point_paths[p]):
                 cur_point = point_paths[p].iloc[step]
                 # print(cur_point)
-                ax_an1.scatter(cur_point['X'], cur_point['Y'])
-                ax_an2.plot(point_paths[p]['kdrdt'], point_paths[p]['temp'])
-                ax_an2.scatter(cur_point['kdrdt'], cur_point['temp'])
+                ax_an1.scatter(cur_point['X'], cur_point['Y'], s=5)
+                ax_an2.plot(point_paths[p][x_axis], point_paths[p][y_axis])
+                ax_an2.scatter(cur_point[x_axis], cur_point[y_axis], s=5)
     # ax_an2.set_xscale('log')
         # ax_an1.quiver(cur_point['X'], cur_point['Y'], n[0], n[1], angles='xy', scale_units='xy', scale=1)
     # ax_an1.quiver(cur_point['X'], cur_point['Y'], u[0] * scale, u[1] * scale, angles='xy', scale_units='xy', scale=1)
@@ -423,36 +425,72 @@ def graph_data(x_axis, y_axis, num_points=10, reg=False, smooth=False, animating
         # data['kdrdt'] = savgol_filter(data['kdrdt'], 50, 3)
         data = data.dropna()
         point_paths.append(data)
-    print(point_paths[0])
     print('Done reading data')
     fig = plt.figure()
     if animating:
         ax_an1 = fig.add_subplot(1, 2, 1)
         ax_an2 = fig.add_subplot(1, 2, 2)
+        # fig.tight_layout()
         print(f'animating ...')
-        anim = animation.FuncAnimation(fig, update_fig, fargs=(point_paths, ax_an1, ax_an2, num_points),
+        anim = animation.FuncAnimation(fig, update_fig, fargs=(point_paths, ax_an1, ax_an2, x_axis, y_axis, num_points),
                                        interval=1, frames=i_max - i_min - 3, repeat=False, blit=False)
-        fig.tight_layout()
-        plt.show()
+        # plt.show()
         # writervideo = animation.FFMpegWriter(fps=60)
         # anim.save('test_anim.mp4', writer=writervideo)
-        # anim.save('kdrdt.gif', writer='imagemagick', fps=60)
+        anim.save(f'{num_points}{y_axis}Plot.gif', writer='imagemagick', fps=60)
         plt.close()
     else:
-        ax_an1 = fig.add_subplot(1, 1, 1)
-        ax_an1.cla()
-        # n = np.array([cur_point['progress_variable_gx'] * cur_point['q'], cur_point['progress_variable_gy'] * cur_point['q']])
-        # u = np.array([cur_point['x_velocity'] * cur_point['dt'], cur_point['y_velocity'] * cur_point['dt']])
-        ax_an1.set_xlabel('k dr/dt')
-        ax_an1.set_ylabel('temp')
         # each index contains all points for cur timestep
+        '''
+        x_coords = np.array([point_paths[p]['X'].values for p in range(num_points)])
+        y_coords = np.array([point_paths[p]['Y'].values for p in range(num_points)])
         x_vals_per_point = np.array([point_paths[p][x_axis].values for p in range(num_points)])
         y_vals_per_point = np.array([point_paths[p][y_axis] for p in range(num_points)])
+        t_vals_per_point = np.array([point_paths[p]['t'] for p in range(num_points)])
+        other_vals_per_point = np.array([point_paths[p]['q'] / point_paths[p]['dt'] for p in range(num_points)])
         x_vals_per_time = x_vals_per_point.T
         y_vals_per_time = y_vals_per_point.T
+        ax_an1 = fig.add_subplot(1, 2, 1)
+        ax_an2 = fig.add_subplot(1, 2, 2)
+        ax_an1.cla()
+        ax_an2.cla()
+        # n = np.array([cur_point['progress_variable_gx'] * cur_point['q'], cur_point['progress_variable_gy'] * cur_point['q']])
+        # u = np.array([cur_point['x_velocity'] * cur_point['dt'], cur_point['y_velocity'] * cur_point['dt']])
+        ax_an1.set_xlabel(x_axis)
+        ax_an1.set_ylabel(y_axis)
+        ax_an2.set_xlabel('t')
+        ax_an2.set_ylabel(x_axis)
 
-        ax_an1.scatter(x_vals_per_point[3], y_vals_per_point[3], s=1)
+        index = 0
+        ax_an1.scatter(x_vals_per_point[index], y_vals_per_point[index])
+        # ax_an2.plot(t_vals_per_point[index], x_vals_per_point[index])
+        # '''
+        '''
+        all_x_vals = []
+        all_y_vals = []
+        all_t_vals = []
+        all_speed_vals = []
+        indices = []
+        for p in range(len(point_paths)):
+            for i in range(len(point_paths[p][x_axis].values)):
+                valx = point_paths[p][x_axis].values[i]
+                valy = point_paths[p][y_axis].values[i]
+                valt = point_paths[p]['t'].values[i]
+                val_speed = point_paths[p]['q'].values[i] / point_paths[p]['dt'].values[i]
+                if True:
+                    all_x_vals.append(valx)
+                    all_y_vals.append(valy)
+                    all_t_vals.append(valt)
+                    all_speed_vals.append(val_speed)
+        all_x_vals = np.array(all_x_vals)
+        all_y_vals = np.array(all_y_vals)
+        all_t_vals = np.array(all_t_vals)
+        all_speed_vals = np.array(all_speed_vals)
 
+        ax = fig.add_subplot(1, 1, 1, projection='scatter_density')
+        ax.set_xscale('log')
+        pdf_2D(fig, ax, all_x_vals, all_y_vals, x_axis, y_axis, dpi=100)
+        # '''
         fig.tight_layout()
         plt.show()
     '''
@@ -504,9 +542,10 @@ def main():
     # new_curvature()
     # process_dats(smooth=False)
     # regular_process(smooth=True)
-    num_points = 25
-    # process_surfaces(num_points=num_points, reg=False, smooth=True)
-    graph_data('kdrdt', 'temp', num_points=num_points, reg=False, smooth=True, animating=False)
+    num_points = 314
+    # res = process_surfaces(reg=False, smooth=True)
+    # print(res)
+    graph_data('t', 'Y_OH', num_points=num_points, reg=False, smooth=True, animating=True)
     # test_stuff()
     return
 

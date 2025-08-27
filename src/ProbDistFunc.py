@@ -35,7 +35,7 @@ def pdf_2D(fig, ax, xd, yd, xlabel, ylabel, dpi=70, scale=None):
     if scale is not None:
         ax.set_xscale('log')
     density = ax.scatter_density(xd, yd, cmap=white_viridis, dpi=dpi, norm=matplotlib.colors.SymLogNorm(linthresh=0.03))
-    fig.colorbar(density, label='Number of points per pixel')
+    fig.colorbar(density, label='Number of points per pixel', vmin=0)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     return
